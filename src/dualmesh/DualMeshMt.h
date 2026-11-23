@@ -57,6 +57,23 @@ uint8_t  nodeCount();
 bool     nodeAt(uint8_t i, Node& out);    // newest first
 void     nodeName(uint32_t num, char* out, size_t cap);
 
+// RX diagnostics (v0.1.1): what became of each Meshtastic frame the radio handed up.
+struct RxDiag {
+    uint32_t frames;       // frames popped from the radio
+    uint32_t badHeader;    // too short / id 0
+    uint32_t decoded;      // a key opened it (channel, fallback or PKI)
+    uint32_t fallback;     // opened by a key whose hash did not match
+    uint32_t noKey;        // no enabled channel has this hash, and no key opened it
+    uint32_t badDecrypt;   // a channel hash matched but the Data did not parse
+    uint32_t pkiOther;     // PKI to another node / unknown sender key
+    uint32_t dupes;        // relayed copies
+    uint8_t  lastHash;     // channel hash of the last frame
+    uint8_t  lastPort;
+    uint32_t lastFrom;
+    uint32_t lastMs;
+};
+RxDiag   rxDiag();
+
 // Identity changed: the next text announces it again.
 void     identityChanged();
 }

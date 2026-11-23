@@ -188,13 +188,33 @@ static void saveIfDirty() {
     p.end();
 }
 
+static RxDiag s_diag;
+RxDiag rxDiag() { return s_diag; }
+
 static void handle(const Lora::Packet& pk) {
     static Decoded d;   // ~1 KB: keep it off the loop task's stack
-    if (!decode(pk, d)) return;
+    s_diag.frames++;
+    if (!decode(pk, d)) { s_diag.badHeader++; Serial.printf("[mt] bad header len=%u\n", (unsigned)pk.len); return; }
     const Header& h = d.hdr;
+    s_diag.lastHash = h.channelHash; s_diag.lastFrom = h.from; s_diag.lastMs = millis();
+    if (d.haveData) {
+        s_diag.decoded++;
+        if (d.viaFallback) s_diag.fallback++;
+        s_diag.lastPort = (uint8_t)d.data.portnum;
+    } else if (h.channelHash == 0 && h.to != BROADCAST) {
+        s_diag.pkiOther++;
+    } else {
+        bool match = false;
+        for (uint8_t i = 0; i < channelCount(); i++) { const Channel c = channel(i); if (c.enabled && c.hash == h.channelHash) match = true; }
+        if (match) s_diag.badDecrypt++; else s_diag.noKey++;
+    }
+    Serial.printf("[mt] from=!%08lx to=!%08lx id=%08lx hash=0x%02x %s port=%u ch=%u%s\n",
+                  (unsigned long)h.from, (unsigned long)h.to, (unsigned long)h.id, h.channelHash,
+                  d.haveData ? "OK" : "NO-KEY", d.haveData ? (unsigned)d.data.portnum : 0u,
+                  (unsigned)d.channelIdx, d.viaFallback ? " (fallback key)" : "");
     if (h.from == s_me) return;              // our own, through a relay
     noteNode(pk, h);
-    if (seen(h.from, h.id)) return;          // a relayed copy
+    if (seen(h.from, h.id)) { s_diag.dupes++; return; }   // a relayed copy
     const uint32_t now = millis();
     lock();
     Lora::Dm::onFrame(d, now, cfg().mt_hops);

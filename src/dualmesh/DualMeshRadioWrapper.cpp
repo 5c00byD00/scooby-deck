@@ -5,8 +5,14 @@
 //  - home: plain continuous RX on the MeshCore profile; a look never starts
 //    while a frame is arriving (PREAMBLE/HEADER_VALID extend the stay).
 //  - peek: one CAD on the Meshtastic profile (2 symbols at SF>=10, else 4,
-//    detection peak SF+16 at SF>=10); on a hit, RX there until the preamble,
-//    header and frame land or their deadlines pass; then home again.
+//    detection peak SF+16 at SF>=10) that exits straight into RX (CAD_GOTO_RX,
+//    as SquachWatch does): no standby + SPI + startReceive gap eating the
+//    preamble. On a hit, RX there until the preamble, header and frame land or
+//    their deadlines pass; then home again.
+//  - IRQs are serviced on the DIO1 LEVEL, not only its rising edge: v0.1.0
+//    waited for an edge only, so a flag that stayed latched (two events inside
+//    one SPI read/clear) left DIO1 high with no new edge and the radio deaf
+//    until something else re-armed it -- forever in a single-profile mode.
 //  - homeMs(): how long to stay home between looks so a look lands inside
 //    the peek profile's preamble with room for CAD + lock.
 //  - TX: MeshCore's Dispatcher already does LBT through isReceiving(); its
@@ -35,6 +41,10 @@ const RadioLibIrqFlags_t RX_IRQS =
     (1UL << RADIOLIB_IRQ_RX_DONE) | (1UL << RADIOLIB_IRQ_TIMEOUT) | (1UL << RADIOLIB_IRQ_CRC_ERR) |
     (1UL << RADIOLIB_IRQ_HEADER_VALID) | (1UL << RADIOLIB_IRQ_HEADER_ERR) | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED);
 const RadioLibIrqFlags_t CAD_IRQS = (1UL << RADIOLIB_IRQ_CAD_DONE) | (1UL << RADIOLIB_IRQ_CAD_DETECTED);
+// A look's CAD exits into RX, so its RX events must reach DIO1 too.
+const RadioLibIrqFlags_t LOOK_IRQS = RX_IRQS | CAD_IRQS;
+
+inline bool dio1High() { return digitalRead(P_LORA_DIO_1) == HIGH; }
 
 SemaphoreHandle_t s_irq = nullptr;
 SemaphoreHandle_t s_q   = nullptr;     // guards the rings below
@@ -78,6 +88,10 @@ uint8_t  cadPeak(const RadioProfile& p) { return p.sf >= 10 ? (uint8_t)(p.sf + 1
 uint32_t cadMs(const RadioProfile& p) { return (symUs(p) * (cadSymbols(p) + 1)) / 1000 + 4; }
 uint32_t preambleMs(const RadioProfile& p) { return (symUs(p) * ((uint32_t)p.preamble + 4)) / 1000; }
 uint32_t preambleDeadlineMs(const RadioProfile& p) { return (symUs(p) * 8u) / 1000 + 8; }
+// After a look's CAD hit: SquachWatch bench-measured PREAMBLE 21-26 ms after a
+// real hit at MediumSlow/LongFast and drops a silent hit after 4 symbols + 6 ms;
+// 6 symbols + 6 ms here leaves a little more room.
+uint32_t quickPreambleMs(const RadioProfile& p) { return (symUs(p) * 6u) / 1000 + 6; }
 uint32_t headerDeadlineMs(const RadioProfile& p) { return (symUs(p) * (uint32_t)(p.preamble + 13)) / 1000 + 20; }
 uint32_t maxFrameMs(const RadioProfile& p) {
     return Lora::timeOnAirUs(p.sf, bw10(p.bw), 8, p.preamble, 255, true, false, false) / 1000 + 50;
@@ -272,8 +286,11 @@ bool DualMeshRadioWrapper::applyProfile(const RadioProfile& p) {
     r->standby();
     _rxOn = false;
     // Image calibration is per band: hops inside 902-928 (or 863-870) need none.
-    const bool cal = fabsf(p.freq - _applied.freq) > 30.0f;
+    // Track the calibrated band separately: v0.1.0 compared with _applied, which
+    // is zeroed on every config change / AGC reset, so each one re-ran it.
+    const bool cal = _calFreq == 0 || fabsf(p.freq - _calFreq) > 30.0f;
     int16_t st = r->setFrequency(p.freq, !cal);
+    if (st == RADIOLIB_ERR_NONE && cal) _calFreq = p.freq;
     if (st == RADIOLIB_ERR_NONE) st = r->setBandwidth(p.bw);
     if (st == RADIOLIB_ERR_NONE) st = r->setSpreadingFactor(p.sf);
     if (st == RADIOLIB_ERR_NONE) st = r->setCodingRate(p.cr);
@@ -295,8 +312,21 @@ bool DualMeshRadioWrapper::startRx() {
     return _rxOn;
 }
 
+// True on a DIO1 edge (or a TX wake from startSendRaw), or when DIO1 is HIGH:
+// a latched IRQ that produced no fresh edge is still serviced within ~4 ms.
 bool DualMeshRadioWrapper::waitIrq(uint32_t ms) {
-    return xSemaphoreTake(s_irq, pdMS_TO_TICKS(ms ? ms : 1)) == pdTRUE;
+    const uint32_t t0 = millis();
+    for (;;) {
+        if (dio1High()) {
+            if (xSemaphoreTake(s_irq, 0) != pdTRUE) _st.levelIrqs++;
+            return true;
+        }
+        const uint32_t el = millis() - t0;
+        if (el >= ms) return false;
+        uint32_t slice = ms - el;
+        if (slice > 4) slice = 4;
+        if (xSemaphoreTake(s_irq, pdMS_TO_TICKS(slice) ? pdMS_TO_TICKS(slice) : 1) == pdTRUE) return true;
+    }
 }
 
 bool DualMeshRadioWrapper::mcTxWanted() const { return s_mcTx.state == TX_PENDING; }
@@ -309,7 +339,18 @@ void DualMeshRadioWrapper::readFrame(uint8_t which) {
     uint8_t buf[256];
     const int16_t st = r->readData(buf, len);
     const float rssi = r->getRSSI(), snr = r->getSNR();
-    if (st != RADIOLIB_ERR_NONE || (flags & IRQ_CRC_ERR)) { _st.crcErr++; n_recv_errors++; return; }
+    _lastIrqMs = millis();
+    if (which == ON_MESHTASTIC) {
+        _st.mtLastRssi = (int16_t)lroundf(rssi); _st.mtLastSnr4 = (int16_t)lroundf(snr * 4.0f);
+        _st.mtLastLen = (uint8_t)len; _st.mtLastMs = millis();
+    }
+    if (st != RADIOLIB_ERR_NONE || (flags & IRQ_CRC_ERR)) {
+        _st.crcErr++; n_recv_errors++;
+        if (which == ON_MESHTASTIC) _st.mtCrcErr++; else _st.mcCrcErr++;
+        Serial.printf("[dualmesh] %s rx drop: st=%d flags=0x%04x len=%u rssi=%.0f snr=%.1f\n",
+                      which == ON_MESHTASTIC ? "MT" : "MC", st, flags, (unsigned)len, rssi, snr);
+        return;
+    }
     if (!len) return;
     xSemaphoreTake(s_q, portMAX_DELAY);
     if (which == ON_MESHCORE) {
@@ -333,6 +374,8 @@ void DualMeshRadioWrapper::readFrame(uint8_t which) {
             pk.proto = Lora::Proto::MESHTASTIC;
             s_mtW = nw;
             _st.mtRx++;
+            Serial.printf("[dualmesh] MT rx len=%u rssi=%.0f snr=%.1f hash=0x%02x\n",
+                          (unsigned)len, rssi, snr, len > 13 ? buf[13] : 0);
         }
     }
     xSemaphoreGive(s_q);
@@ -369,10 +412,28 @@ void DualMeshRadioWrapper::listen(uint8_t which, uint32_t ms) {
                 _st.noise = _st.noise == 0 ? (int16_t)v : (int16_t)((_st.noise * 7 + (int16_t)v) / 8);
             }
         }
-        if (!waitIrq(until - now)) continue;
+        if (!waitIrq(until - now)) {
+            // A started frame whose events never came (header deadline passed):
+            // re-arm so the receiver is not left mid-frame.
+            if (busy && (int32_t)(millis() - _busyUntil) >= 0) {
+                radioAcquire();
+                chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
+                startRx();
+                radioRelease();
+                _busyUntil = 0;
+                _st.rearms++;
+            }
+            continue;
+        }
         radioAcquire();
         const uint16_t f = (uint16_t)chip(_radio)->getIrqFlags();
         const uint32_t t = millis();
+        if (f) _lastIrqMs = t;
+        if (which == ON_MESHTASTIC) {
+            if (f & IRQ_PREAMBLE)  _st.mtPre++;
+            if (f & IRQ_HDR_VALID) _st.mtHdr++;
+            if (f & IRQ_HDR_ERR)   _st.mtHdrErr++;
+        }
         if (f & IRQ_PREAMBLE)  _busyUntil = t + headerDeadlineMs(p);
         if (f & IRQ_HDR_VALID) _busyUntil = t + maxFrameMs(p);
         if (f & (IRQ_RX_DONE | IRQ_CRC_ERR)) {
@@ -384,66 +445,108 @@ void DualMeshRadioWrapper::listen(uint8_t which, uint32_t ms) {
             _busyUntil = 0;
             chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
             startRx();
-        } else {
-            chip(_radio)->clearIrqFlags(f & (IRQ_PREAMBLE | IRQ_HDR_VALID));
+        } else if (f) {
+            // Clear exactly what was read, so DIO1 drops and the next event
+            // makes a fresh edge (and the level poll sees it either way).
+            chip(_radio)->clearIrqFlags(f);
+        } else if (dio1High()) {
+            // DIO1 high with no flag we know: clear all and re-arm.
+            chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
+            startRx();
+            _st.rearms++;
         }
         radioRelease();
     }
     _busyUntil = 0;
 }
 
-// One look at the Meshtastic profile: CAD, and on a hit, receive the frame.
+// One look at the Meshtastic profile: a CAD that exits straight into RX on a
+// detection (SquachWatch's startCad(..., gotoRx=true, maxFrameMs)), then the
+// frame if one follows. Ported from homeAndPeek() + catchAfterHit(quick).
 void DualMeshRadioWrapper::peek() {
     const RadioProfile& p = _mt;
     _st.peeks++;
     radioAcquire();
     if (!applyProfile(p)) { radioRelease(); return; }
     _on = ON_MESHTASTIC;
+    _rxOn = false;
     ChannelScanConfig_t cfgScan;
     memset(&cfgScan, 0, sizeof cfgScan);
     const uint8_t syms = cadSymbols(p);
+    const uint32_t frameMs = maxFrameMs(p);
     cfgScan.cad.symNum   = syms <= 2 ? RADIOLIB_SX126X_CAD_ON_2_SYMB : syms >= 8 ? RADIOLIB_SX126X_CAD_ON_8_SYMB : RADIOLIB_SX126X_CAD_ON_4_SYMB;
     cfgScan.cad.detPeak  = cadPeak(p) ? cadPeak(p) : RADIOLIB_SX126X_CAD_PARAM_DEFAULT;
     cfgScan.cad.detMin   = RADIOLIB_SX126X_CAD_PARAM_DEFAULT;
-    cfgScan.cad.exitMode = RADIOLIB_SX126X_CAD_GOTO_STDBY;
-    cfgScan.cad.timeout  = 0;
-    cfgScan.cad.irqFlags = CAD_IRQS;
-    cfgScan.cad.irqMask  = CAD_IRQS;
+    cfgScan.cad.exitMode = RADIOLIB_SX126X_CAD_GOTO_RX;
+    cfgScan.cad.timeout  = (frameMs > 262000u ? 262000u : frameMs) * 1000u;   // us; RadioLib divides by 15.625
+    cfgScan.cad.irqFlags = LOOK_IRQS;
+    cfgScan.cad.irqMask  = LOOK_IRQS;
     xSemaphoreTake(s_irq, 0);
     int16_t st = chip(_radio)->startChannelScan(cfgScan);
     radioRelease();
-    if (st != RADIOLIB_ERR_NONE) return;
-    waitIrq(cadMs(p) + 6);
+    if (st != RADIOLIB_ERR_NONE) { vTaskDelay(pdMS_TO_TICKS(20)); return; }
+    if (!waitIrq(cadMs(p) + 30)) {
+        radioAcquire(); chip(_radio)->standby(); chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL); radioRelease();
+        return;
+    }
     radioAcquire();
     uint16_t f = (uint16_t)chip(_radio)->getIrqFlags();
-    chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
-    const bool hit = (f & IRQ_CAD_DET) != 0;
-    if (!hit) { radioRelease(); return; }
+    if (!(f & IRQ_CAD_DET)) {
+        // Nothing there: the chip exits CAD to standby by itself.
+        chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
+        radioRelease();
+        return;
+    }
     _st.cadHits++;
-    startRx();
+    _lastIrqMs = millis();
+    // The chip is already in RX. Clear only the CAD bits: a PREAMBLE that came
+    // in the same breath stays for the loop below.
+    chip(_radio)->clearIrqFlags(IRQ_CAD_DET | IRQ_CAD_DONE);
     radioRelease();
-    // A real frame raises PREAMBLE within a few symbols; then HEADER, then DONE.
-    uint32_t deadline = millis() + preambleDeadlineMs(p);
-    bool gotPre = false, gotHdr = false;
-    for (;;) {
-        const uint32_t now = millis();
-        if ((int32_t)(now - deadline) >= 0 || _paused || _off) break;
-        if (!waitIrq(deadline - now)) continue;
+    const uint32_t t0 = millis();
+    const uint32_t preBy = quickPreambleMs(p), hdrBy = headerDeadlineMs(p);
+    bool gotPre = (f & IRQ_PREAMBLE) != 0, gotHdr = (f & IRQ_HDR_VALID) != 0;
+    if (gotPre) _st.mtPre++;
+    if (gotHdr) _st.mtHdr++;
+    _busyUntil = t0 + (gotHdr ? frameMs : hdrBy);
+    bool done = false;
+    while (!done && millis() - t0 < frameMs + 50 && !_paused && !_off) {
+        const uint32_t el = millis() - t0;
+        uint32_t wait = frameMs + 50 - el;
+        if (!gotPre) {
+            if (el >= preBy) break;
+            if (wait > preBy - el) wait = preBy - el;
+        }
+        if (!gotHdr) {
+            if (el >= hdrBy) break;
+            if (wait > hdrBy - el) wait = hdrBy - el;
+        }
+        if (!waitIrq(wait)) continue;
         radioAcquire();
         f = (uint16_t)chip(_radio)->getIrqFlags();
-        if ((f & IRQ_PREAMBLE) && !gotPre) { gotPre = true; deadline = millis() + headerDeadlineMs(p); _busyUntil = deadline; }
-        if ((f & IRQ_HDR_VALID) && !gotHdr) { gotHdr = true; deadline = millis() + maxFrameMs(p); _busyUntil = deadline; }
+        if ((f & IRQ_PREAMBLE) && !gotPre) { gotPre = true; _st.mtPre++; }
+        if ((f & IRQ_HDR_VALID) && !gotHdr) { gotHdr = true; gotPre = true; _st.mtHdr++; _busyUntil = millis() + frameMs; }
         if (f & (IRQ_RX_DONE | IRQ_CRC_ERR)) {
             readFrame(ON_MESHTASTIC);
             _st.peekFrames++;
             chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
-            radioRelease();
-            break;
+            done = true;
+        } else if (f & (IRQ_HDR_ERR | IRQ_TIMEOUT)) {
+            if (f & IRQ_HDR_ERR) _st.mtHdrErr++;
+            chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
+            done = true;
+        } else if (f) {
+            chip(_radio)->clearIrqFlags(f);
+        } else if (dio1High()) {
+            chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
         }
-        if (f & (IRQ_HDR_ERR | IRQ_TIMEOUT)) { chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL); radioRelease(); break; }
-        chip(_radio)->clearIrqFlags(f & (IRQ_PREAMBLE | IRQ_HDR_VALID));
         radioRelease();
     }
+    if (!gotPre && !gotHdr) _st.cadMiss++;
+    radioAcquire();
+    chip(_radio)->standby();
+    chip(_radio)->clearIrqFlags(RADIOLIB_SX126X_IRQ_ALL);
+    radioRelease();
     _busyUntil = 0;
     _rxOn = false;
 }
@@ -552,7 +655,14 @@ void DualMeshRadioWrapper::taskBody() {
             } else { doTx(ON_MESHTASTIC); continue; }
         }
         if (s_mcTx.state == TX_PENDING && mode == MODE_MESHTASTIC) s_mcTx.state = TX_FAIL;
-        // 2. receive
+        // 2. receive. Single-profile modes: a watchdog re-arms RX when the chip
+        // has been silent for 20 s (no event at all, not even a noise preamble),
+        // so a wedged receiver costs seconds, not the rest of the session.
+        if (mode != MODE_DUAL && _rxOn && millis() - _lastIrqMs > 20000u) {
+            _lastIrqMs = millis();
+            _rxOn = false;
+            _st.rearms++;
+        }
         if (mode == MODE_MESHCORE)        listen(ON_MESHCORE, 100);
         else if (mode == MODE_MESHTASTIC) listen(ON_MESHTASTIC, 100);
         else {

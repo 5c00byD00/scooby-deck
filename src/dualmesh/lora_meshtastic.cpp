@@ -596,6 +596,31 @@ bool decode(const Lora::Packet& pk, Decoded& out) {
             out.channelIdx = i;
             break;
         }
+        if (!out.haveData && plen >= 2) {
+            // Scooby Deck v0.1.1: the hash is only a hint. A primary channel whose
+            // NAME differs (blank vs "MediumSlow" vs "LongFast" on the same key)
+            // gives a different hash but the same AES key, so try every enabled
+            // key once more, then the default key, and accept only a Data that
+            // parses cleanly AND starts with the portnum tag (0x08).
+            uint8_t defKey[16]; expandPsk(1, defKey);
+            for (uint8_t i = 0; i <= channelCount() && !out.haveData; i++) {
+                Channel c;
+                if (i < channelCount()) {
+                    c = channel(i);
+                    if (!c.enabled || c.hash == out.hdr.channelHash || !c.keyLen) continue;
+                } else {
+                    memset(&c, 0, sizeof c);
+                    memcpy(c.key, defKey, 16); c.keyLen = 16; c.enabled = true;
+                }
+                memcpy(out.plain, pk.data + 16, plen);
+                decrypt(out.hdr, c, out.plain, plen);
+                if (out.plain[0] != 0x08) continue;
+                if (!parseData(out.plain, plen, out.data)) continue;
+                out.haveData = true;
+                out.viaFallback = true;
+                out.channelIdx = i < channelCount() ? i : 0;
+            }
+        }
         if (!out.haveData) return true;
     }
 

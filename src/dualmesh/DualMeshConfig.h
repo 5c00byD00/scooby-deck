@@ -68,7 +68,8 @@ float    mtBw();
 uint8_t  mtSf();                  // with shared SF applied
 uint8_t  mtCr();
 const char* mtPresetName();       // "MediumSlow" or "Custom"
-const char* mtPrimaryName();      // slot 0's effective name
+const char* mtPrimaryName();
+uint8_t     mtPrimaryHash();   // channel hash of slot 0 as decode() sees it
 uint16_t mtSlotCount();           // slots in the region at the current BW
 // Push the channel table into the Meshtastic codec.
 void     applyChannels();

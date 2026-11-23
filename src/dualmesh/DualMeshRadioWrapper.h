@@ -26,6 +26,19 @@ enum OnProfile : uint8_t { ON_NONE = 0, ON_MESHCORE = 1, ON_MESHTASTIC = 2, ON_T
 struct RadioStats {
     uint32_t mcRx, mtRx, mcTx, mtTx, mcTxFail, mtTxFail, peeks, cadHits, peekFrames, crcErr, txDeferred;
     int16_t  noise;
+    // v0.1.1 RX diagnostics, Meshtastic profile only
+    uint32_t mtPre;        // PREAMBLE_DETECTED while on the Meshtastic profile
+    uint32_t mtHdr;        // HEADER_VALID
+    uint32_t mtHdrErr;     // HEADER_ERR
+    uint32_t mtCrcErr;     // CRC_ERR / read error (frame dropped)
+    uint32_t mcCrcErr;     // same, MeshCore profile
+    uint32_t cadMiss;      // CAD hit, but no preamble/header followed
+    uint32_t rearms;       // watchdog / level-poll RX re-arms
+    uint32_t levelIrqs;    // IRQs found by polling DIO1 (no edge seen)
+    int16_t  mtLastRssi;   // dBm, last Meshtastic frame (good or bad CRC)
+    int16_t  mtLastSnr4;   // SNR x4
+    uint8_t  mtLastLen;
+    uint32_t mtLastMs;     // millis() of that frame, 0 = never
 };
 }
 
@@ -94,6 +107,8 @@ private:
     DualMesh::RadioProfile _mc { 910.525f, 62.5f, 7, 5, 0x12, 32 };
     DualMesh::RadioProfile _mt { 913.875f, 250.0f, 10, 5, 0x2B, 16 };
     DualMesh::RadioProfile _applied { 0, 0, 0, 0, 0, 0 };
+    float   _calFreq = 0;         // band the image calibration was last run for
+    uint32_t _lastIrqMs = 0;      // last radio event, for the re-arm watchdog
     float   _mcFreq = 910.525f, _mcBw = 62.5f;
     uint8_t _mcSf = 7, _mcCr = 5;
     volatile bool    _cfgDirty = true;

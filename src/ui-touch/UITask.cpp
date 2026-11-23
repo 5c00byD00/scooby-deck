@@ -9452,6 +9452,13 @@ enum {
 #include "../dualmesh/DualMeshMt.h"
 #include "../dualmesh/ScoobyVersion.h"
 static void buildScoobySettings();   // ScoobyDeckUi.inc
+static void scoobyBuildRadioMeshSection();   // ScoobyDeckUi.inc: Meshtastic cards on Radio & Mesh
+static void scoobyOpenDashboard();
+static void closeScoobyDashboard();
+static void scoobyOpenMtChats();
+static void closeMtChats();
+static bool scoobyDashOpen();
+static bool scoobyMtOpen();
 static void scoobyOpenDashboard();
 static void scoobyOpenMtChats();
 static void scoobyBootDashboard();
@@ -45981,7 +45988,11 @@ static void settingsCatBuild(int cat) {
 #endif
   switch (cat) {
     case CAT_PROFILE:      buildProfileSettings(); break;
+#if defined(SCOOBY_DECK)
+    case CAT_RADIO:        buildRadioSettings(); scoobyBuildRadioMeshSection(); buildExperimentalSettings(); break;
+#else
     case CAT_RADIO:        buildRadioSettings(); buildExperimentalSettings(); break;
+#endif
     case CAT_AUTOADD:      buildAutoAddSettings(); break;
     case CAT_WIFI:         buildWifiSettings(); break;
     case CAT_BLUETOOTH:    buildBluetoothSettings(); break;
@@ -57340,6 +57351,26 @@ if (g_lv.task && g_lv.task->isManualLock()) {
     if (!s_setup_root && key == ' ') {
       startLockingCountdown();   // 1 s "Locking…" countdown; tap / any other key cancels
       return;
+    }
+#endif
+#if defined(SCOOBY_DECK) && (CAP_TRACKBALL || defined(HAS_TDECK_PRO))
+    // Scooby Deck hotkeys, with no text field being edited and the key not bound
+    // to navigation in Settings > Keyboard: B = the dashboard (toggles), M = the
+    // Meshtastic chats. Work from anywhere: an open settings page or app page is
+    // closed first.
+    if (!s_setup_root && !navFocusedTextarea()) {
+      const int lk = (key >= 'A' && key <= 'Z') ? key + 32 : key;
+      if ((lk == 'b' || lk == 'm') && navKeyUsedBy(lk, -1) < 0) {
+        if (lk == 'b' && scoobyDashOpen()) closeScoobyDashboard();
+        else if (lk == 'm' && scoobyMtOpen()) closeMtChats();
+        else {
+          if (scoobyDashOpen()) closeScoobyDashboard();
+          if (s_settings_sheet || s_settings_open_cat >= 0) closeSettingsCategory();
+          if (lk == 'b') scoobyOpenDashboard(); else scoobyOpenMtChats();
+        }
+        if (g_lv.task) g_lv.task->noteUserInput();
+        return;
+      }
     }
 #endif
 #if CAP_TRACKBALL || defined(HAS_TDECK_PRO)
@@ -87819,6 +87850,10 @@ static const PopupEnt k_popup_registry[] = {
   { P_OPEN(s_urlmenu_root),          []{ closeUrlMenu(); },               PF_COUNT },   // chat URL -> action menu
   { P_OPEN(s_discover_root),         []{ closeDiscoverPage(); },          PF_COUNT },
   { P_OPEN(s_spec_root),             []{ closeSpectrumPage(); },          PF_COUNT },
+#if defined(SCOOBY_DECK)
+  { P_OPEN(s_mt_root),               []{ closeMtChats(); },               PF_COUNT | PF_SWIPE },   // Scooby Deck: Meshtastic chats (Back steps out one level)
+  { P_OPEN(s_dash_root),             []{ closeScoobyDashboard(); },       PF_COUNT | PF_SWIPE },   // Scooby Deck: dashboard
+#endif
   { P_OPEN(s_advert_root),           []{ closeAdvertPage(); },            PF_COUNT },   // was dismissable but never counted
 #if defined(HAS_EXPANSION_KIT)
   { P_OPEN(s_expansion_root),        []{ closeExpansionCard(); },         PF_COUNT },   // was in no registry at all

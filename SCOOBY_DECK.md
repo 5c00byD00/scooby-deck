@@ -21,3 +21,43 @@ Build: `pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin`
 - SquachWatch-CYD — skizzophrenic, GPL-3.0 (dual-mesh scheduler, Meshtastic codec, crypto, DMs)
 - MeshCore — Scott Powell / ripplebiz, MIT
 - Meshtastic — Meshtastic LLC and contributors, GPL-3.0 (protocol)
+
+## v0.1.1 (2026-11-23)
+
+Meshtastic RX and navigation fixes. Found by code review against SquachWatch-CYD
+and RadioLib 7.8.1; built, not yet bench-tested on hardware.
+
+Radio (src/dualmesh/DualMeshRadioWrapper.cpp):
+- IRQs are serviced on the DIO1 level, polled every 4 ms, not only on its rising
+  edge. v0.1.0 could leave a latched flag holding DIO1 high with no new edge, so
+  the receiver went deaf (for good in Meshtastic-only / MeshCore-only).
+- The Meshtastic look is a CAD that exits straight into RX (CAD_GOTO_RX, with the
+  RX IRQs routed to DIO1), as in SquachWatch's homeAndPeek(). v0.1.0 went
+  CAD -> standby -> SPI -> startReceive and lost preamble on every hit.
+- A silent CAD hit is dropped after 6 symbols + 6 ms (SquachWatch: 4 + 6).
+- Partial events clear exactly the flags read; a stuck frame is re-armed when its
+  header deadline passes; single-profile modes re-arm RX after 20 s of silence.
+- Image calibration only runs on a real band change (not after every config
+  change / AGC reset).
+
+Decode (src/dualmesh/lora_meshtastic.cpp): when no channel hash matches, every
+enabled key and then the default key (AQ==) is tried, and a result is accepted
+only if the Data starts with the portnum tag and parses cleanly. So a primary
+channel named blank/"MediumSlow"/"LongFast" on the default key still decodes.
+
+Diagnostics: the dashboard shows [MTRX] lines with preambles, headers, header
+errors, CRC errors, raw frames, decoded, no-key, bad-decrypt, fallback, CAD misses,
+last RSSI/SNR/len, last sender/hash/port and our primary hash. The serial log
+(115200) prints one line per Meshtastic frame.
+
+UI:
+- Settings > Mesh > Radio & Mesh now has the Meshtastic section (mode, shared SF,
+  preset/custom BW/SF/CR, slot/frequency, sync, preamble, hops, TX power, TDM)
+  under WadaMesh's MeshCore radio cards, with links to the dashboard, the chats and
+  Settings > Scooby Deck (channels and names).
+- Keys: B opens/closes the dashboard, M opens/closes the Meshtastic chats, from any
+  screen (when no text field is being edited and the key isn't bound to navigation).
+- The dashboard and the chats are registered in WadaMesh's popup registry, so Back
+  (Q / Esc / the status-bar chevron) closes them and tab swipes are blocked under them.
+- Terminal theme: the accent colour is bright green, so black text on the accent
+  stays readable.

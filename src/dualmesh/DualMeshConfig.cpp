@@ -107,6 +107,7 @@ const char* mtPrimaryName() {
     if (s_cfg.ch[0].name[0]) return s_cfg.ch[0].name;
     return s_cfg.mt_preset < mtPresetCount() ? PRESETS[s_cfg.mt_preset].name : "Custom";
 }
+uint8_t mtPrimaryHash() { return Meshtastic::channel(0).hash; }
 float mtBw() { return s_cfg.mt_preset < mtPresetCount() ? PRESETS[s_cfg.mt_preset].bw : s_cfg.mt_bw; }
 uint8_t mtSf() {
     if (s_cfg.shared_sf) return s_cfg.shared_sf;

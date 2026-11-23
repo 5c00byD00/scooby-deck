@@ -230,6 +230,7 @@ struct Decoded {
     bool     haveData;      // a channel key opened it -- or, with pki, our own key pair
     uint8_t  channelIdx;    // which Channel did; PKI_CHANNEL for a direct message
     bool     pki;           // a direct message to this board, opened by the PkiOpener
+    bool     viaFallback;   // opened by a key whose channel hash did not match (see decode())
     Data     data;
     uint8_t  plain[240];
     // The payload, by port; only the one matching data.portnum is filled.

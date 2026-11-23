@@ -57,6 +57,9 @@ static void applyTerminalTheme() {
   for (uint32_t& h : COLOR_HUE) h = TERM_GREEN;
   COLOR_HUE[HUE_RADIO] = TERM_AMBER;
   COLOR_LINK = TERM_MID;
+  // Black text sits on the accent (selected rows, active tabs): make the accent
+  // a bright green so it reads, never black-on-teal/black-on-dark.
+  COLOR_ACCENT = 0x00C832; COLOR_ACCENT_PRESS = 0x008F24;
   lv_scooby_flat = 1;
 }
 
@@ -135,7 +138,7 @@ static void dashFill() {
   scoobyCpuSample();
   using namespace DualMesh;
   const Config& c = cfg();
-  char b[900], bar[16];
+  static char b[1600]; char bar[16];
   char* p = b; char* e = b + sizeof b;
   // battery
 #if CAP_BATTERY
@@ -181,8 +184,33 @@ static void dashFill() {
                 (unsigned long)st.cadHits, (unsigned long)st.peeks);
   p += snprintf(p, e - p, "[TX   ] MC %lu  MT %lu  FAIL %lu  NOISE %d\n", (unsigned long)st.mcTx, (unsigned long)st.mtTx,
                 (unsigned long)(st.mcTxFail + st.mtTxFail), (int)st.noise);
+  // Meshtastic RX debug (v0.1.1): radio events -> frames -> decode results.
+  {
+    const Mt::RxDiag dg = Mt::rxDiag();
+    p += snprintf(p, e - p, "[MTRX ] PRE %lu HDR %lu HDRERR %lu CRC %lu\n", (unsigned long)st.mtPre,
+                  (unsigned long)st.mtHdr, (unsigned long)st.mtHdrErr, (unsigned long)st.mtCrcErr);
+    p += snprintf(p, e - p, "[MTRX ] RAW %lu OK %lu NOKEY %lu BADDEC %lu\n", (unsigned long)dg.frames,
+                  (unsigned long)dg.decoded, (unsigned long)dg.noKey, (unsigned long)dg.badDecrypt);
+    p += snprintf(p, e - p, "[MTRX ] FALLBK %lu PKI? %lu DUP %lu CADMISS %lu\n", (unsigned long)dg.fallback,
+                  (unsigned long)dg.pkiOther, (unsigned long)dg.dupes, (unsigned long)st.cadMiss);
+    if (st.mtLastMs) {
+      p += snprintf(p, e - p, "[MTRX ] LAST %lus AGO RSSI %d SNR %.1f LEN %u\n",
+                    (unsigned long)((millis() - st.mtLastMs) / 1000), (int)st.mtLastRssi,
+                    (double)st.mtLastSnr4 / 4.0, (unsigned)st.mtLastLen);
+    } else {
+      p += snprintf(p, e - p, "[MTRX ] LAST -- (NO MESHTASTIC FRAME YET)\n");
+    }
+    if (dg.lastMs)
+      p += snprintf(p, e - p, "[MTRX ] FROM !%08lx HASH 0x%02X PORT %u\n", (unsigned long)dg.lastFrom,
+                    dg.lastHash, (unsigned)dg.lastPort);
+    p += snprintf(p, e - p, "[MTRX ] MY HASH 0x%02X (%s)  MC CRC %lu\n", (unsigned)mtPrimaryHash(),
+                  mtPrimaryName(), (unsigned long)st.mcCrcErr);
+    p += snprintf(p, e - p, "[RADIO] REARM %lu LEVEL-IRQ %lu\n", (unsigned long)st.rearms, (unsigned long)st.levelIrqs);
+  }
   char sn[5]; Mt::shortName(sn);
-  snprintf(p, e - p, "[NODE ] %s (%s) !%08lx", Mt::longName(), sn, (unsigned long)Mt::myNum());
+  p += snprintf(p, e - p, "[NODE ] %s (%s) !%08lx\n", Mt::longName(), sn, (unsigned long)Mt::myNum());
+  snprintf(p, e - p, "[KEYS ] B DASHBOARD  M MESHTASTIC  BACK CLOSES\n"
+                     "        SETTINGS > MESH > RADIO & MESH = MT RADIO");
   lv_label_set_text(s_dash_body, b);
 }
 static void dashTimerCb(lv_timer_t*) { dashFill(); }
@@ -191,11 +219,11 @@ static void dashChatsCb(lv_event_t* e) {
   closeScoobyDashboard();
   scoobyOpenMtChats();
 }
+static void dashOpenScoobyAsync(void*) { goToTab(SETTINGS_TAB_INDEX); openSettingsCategory(CAT_SCOOBY); }
 static void dashSettingsCb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   closeScoobyDashboard();
-  goToTab(SETTINGS_TAB_INDEX);
-  openSettingsCategory(CAT_SCOOBY);
+  lv_async_call(dashOpenScoobyAsync, nullptr);   // after this click, once the page is gone
 }
 static void dashHomeCb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -519,6 +547,8 @@ static void closeMtChats() {
   if (s_mt_root) popupClose(&s_mt_root);
   appPageEnd(closeMtChats);
 }
+static bool scoobyDashOpen() { return s_dash_root != nullptr; }
+static bool scoobyMtOpen() { return s_mt_root != nullptr; }
 static void scoobyOpenMtChats() {
   if (s_mt_root) return;
   s_mt_root = appPageCreateRoot(COLOR_BG);
@@ -696,25 +726,11 @@ static void sdResetCb(lv_event_t* e) {
   if (g_lv.task) g_lv.task->showAlert("Dual-mesh settings reset to defaults", 1800);
 }
 
-static void buildScoobySettings() {
+// The mode and Meshtastic radio cards: on Settings > Scooby Deck AND, since
+// v0.1.1, on Settings > Radio & Mesh under WadaMesh's MeshCore radio cards.
+static void sdBuildModeCard() {
   using namespace DualMesh;
   const Config& c = cfg();
-  // About
-  {
-    lv_obj_t* card = setCard("Scooby Deck");
-    char v[64];
-    snprintf(v, sizeof v, "v%s (WadaMesh %s)", SCOOBY_DECK_VERSION, FIRMWARE_VERSION);
-    setInfoRow(card, "Version", v);
-    char id[48]; char sn[5]; Mt::shortName(sn);
-    snprintf(id, sizeof id, "!%08lx %s", (unsigned long)Mt::myNum(), sn);
-    setInfoRow(card, "Meshtastic node", id);
-    setActionRow(card, UI_ICON_INFO, "Open dashboard", nullptr, sdDashCb);
-    setActionRow(card, UI_ICON_MESSAGE_SQUARE, "Meshtastic chats", nullptr, sdChatsCb);
-    setSwitchRow(card, "Terminal theme", "Green-on-black, square and flat. Restart to apply.", scoobyTermOn(), sdTermCb);
-    setNote(card, "Free software under the GPL-3.0. Built on WadaMesh (ALLFATHER-BV, GPL-3.0) with dual-mesh "
-                  "time slicing ported from SquachWatch-CYD (skizzophrenic, GPL-3.0). Speaks MeshCore (MIT) and "
-                  "Meshtastic (GPL-3.0). No warranty.");
-  }
   // Mode
   {
     lv_obj_t* card = setCard("Mesh mode");
@@ -734,6 +750,10 @@ static void buildScoobySettings() {
     setNote(card, "Every peer must use the same SF or you will not hear each other. Off keeps each mesh on its standard SF.",
             SET_TONE_WARN);
   }
+}
+static void sdBuildMtRadioCard() {
+  using namespace DualMesh;
+  const Config& c = cfg();
   // Meshtastic radio
   {
     lv_obj_t* card = setCard("Meshtastic radio");
@@ -777,6 +797,57 @@ static void buildScoobySettings() {
     setNote(card, "Meshtastic never rebroadcasts from this node (client-mute). Default: MediumSlow, slot 48 = 913.875 MHz.");
     setButton(card, nullptr, "Save Meshtastic radio", sdSaveRadioCb, nullptr, SET_PRIMARY);
   }
+}
+
+// Settings > Scooby Deck from another page: after this click's event is done.
+static void sdOpenScoobyAsync(void*) { closeSettingsCategory(); goToTab(SETTINGS_TAB_INDEX); openSettingsCategory(CAT_SCOOBY); }
+static void sdOpenRadioAsync(void*)  { closeSettingsCategory(); goToTab(SETTINGS_TAB_INDEX); openSettingsCategory(CAT_RADIO); }
+static void sdScoobyLinkCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_async_call(sdOpenScoobyAsync, nullptr);
+}
+static void sdRadioLinkCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_async_call(sdOpenRadioAsync, nullptr);
+}
+
+// Settings > Mesh > Radio & Mesh: the Meshtastic section, below MeshCore's.
+static void scoobyBuildRadioMeshSection() {
+  {
+    lv_obj_t* card = setCard("Meshtastic (Scooby Deck)");
+    char b[96];
+    snprintf(b, sizeof b, "%s  %.3f MHz  SF%u", DualMesh::mtPresetName(), (double)DualMesh::mtFreqMHz(), DualMesh::mtSf());
+    setInfoRow(card, "Meshtastic radio", b);
+    setActionRow(card, UI_ICON_INFO, "Open dashboard (key B)", nullptr, sdDashCb);
+    setActionRow(card, UI_ICON_MESSAGE_SQUARE, "Meshtastic chats (key M)", nullptr, sdChatsCb);
+    setActionRow(card, UI_ICON_RADIO_TOWER, "Channels, names & more (Scooby Deck)", nullptr, sdScoobyLinkCb);
+  }
+  sdBuildModeCard();
+  sdBuildMtRadioCard();
+}
+
+static void buildScoobySettings() {
+  using namespace DualMesh;
+  const Config& c = cfg();
+  // About
+  {
+    lv_obj_t* card = setCard("Scooby Deck");
+    char v[64];
+    snprintf(v, sizeof v, "v%s (WadaMesh %s)", SCOOBY_DECK_VERSION, FIRMWARE_VERSION);
+    setInfoRow(card, "Version", v);
+    char id[48]; char sn[5]; Mt::shortName(sn);
+    snprintf(id, sizeof id, "!%08lx %s", (unsigned long)Mt::myNum(), sn);
+    setInfoRow(card, "Meshtastic node", id);
+    setActionRow(card, UI_ICON_INFO, "Open dashboard (key B)", nullptr, sdDashCb);
+    setActionRow(card, UI_ICON_MESSAGE_SQUARE, "Meshtastic chats (key M)", nullptr, sdChatsCb);
+    setActionRow(card, UI_ICON_RADIO_TOWER, "Radio & Mesh (MeshCore + Meshtastic radio)", nullptr, sdRadioLinkCb);
+    setSwitchRow(card, "Terminal theme", "Green-on-black, square and flat. Restart to apply.", scoobyTermOn(), sdTermCb);
+    setNote(card, "Free software under the GPL-3.0. Built on WadaMesh (ALLFATHER-BV, GPL-3.0) with dual-mesh "
+                  "time slicing ported from SquachWatch-CYD (skizzophrenic, GPL-3.0). Speaks MeshCore (MIT) and "
+                  "Meshtastic (GPL-3.0). No warranty.");
+  }
+  sdBuildModeCard();
+  sdBuildMtRadioCard();
   // Names
   {
     lv_obj_t* card = setCard("Names");
