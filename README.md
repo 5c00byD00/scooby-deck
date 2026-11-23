@@ -1,150 +1,114 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/wadamesh-readme-dark.svg">
-    <img alt="WADAMESH" src="assets/wadamesh-readme-light.svg" width="440">
-  </picture>
-</p>
+# Scooby Deck
 
-<p align="center"><b>A real touchscreen UI for your mesh radio.</b> &middot; open source &middot; GPL-3.0</p>
+Custom firmware for the **LilyGO T-Deck Plus** (also runs on the T-Deck) that sends and
+receives on **both MeshCore and Meshtastic with one SX1262 radio**. It is a fork of
+[WadaMesh](README.wadamesh.md) (ALLFATHER-BV), with the dual-mesh time-slicing from
+SquachWatch-CYD (skizzophrenic).
 
-Touch-UI [MeshCore](https://github.com/meshcore-dev/MeshCore) companion-radio
-firmware for the **LilyGo T-Deck / T-Deck Plus**, **Heltec V4 + TFT** and other boards
-(ESP32-S3).
+> **Status:** v0.1.1 is an early build. Its Meshtastic RX fix came from code review
+> and **hasn't been tested on hardware yet**. Please report what the dashboard's
+> `[MTRX]` counters show (see below).
 
-An LVGL touch UI (map, chat, contacts, channels, settings) split out of
-[meshcomod](https://github.com/ALLFATHER-BV/meshcomod). The app depends on a
-MeshCore fork via PlatformIO `lib_deps`.
+## Features
+- **Mesh modes:** Dual (default: MeshCore listens full-time, with short Meshtastic listens),
+  MeshCore-only, or Meshtastic-only. Saved, and applied at once.
+- **Radio defaults**
+  - MeshCore: 910.525 MHz, BW 62.5 kHz, SF7, CR 4/5, sync 0x12.
+  - Meshtastic: MediumSlow, slot 48 = 913.875 MHz (US), sync 0x2B, default key (AQ==).
+  - Meshtastic presets and custom BW/SF/CR, slot or frequency, sync word, preamble,
+    hop limit and TX power are all editable in **Settings > Mesh > Radio & Mesh**.
+- **Shared spreading factor:** Off, SF5, SF7 or SF9 on both meshes. Every peer must use the
+  same SF, so leave it **Off** for normal networks.
+- **Meshtastic client:** the node never rebroadcasts other nodes' packets (client-mute).
+  - Up to 8 channels (name + PSK as hex, base64 or a default-key index).
+  - Direct messages (PKI), NodeInfo announces, a node list and chats.
+  - Sends wait for a clear channel and back off if it's busy.
+- **Names:** long name (up to 39 characters) and short name (up to 4). The long name can sync
+  to the MeshCore node name.
+- **Dashboard** (the home screen at boot):
+  - Battery, GPS, unread counts, mode and radio profiles.
+  - Heap/PSRAM, CPU, RX/TX counters.
+  - The `[MTRX]` Meshtastic receive diagnostics.
+- **Getting around:**
+  - **B** opens or closes the dashboard and **M** the Meshtastic chats, from any screen.
+  - Back (Q / Esc / the status-bar chevron) closes them.
+  - App drawer tiles: *Dashboard* and *Mtastic*.
+  - **Settings > Scooby Deck** has the channels, names and theme.
+- **Retro green terminal theme** across the whole UI, square and flat (can be switched off).
 
-## Boards
+## Flashing
+Download `scooby-deck-tdeckplus-vX.Y.Z-merged.bin` from the
+[Releases](../../releases) page. It is a **merged image: flash it at offset `0x0`**.
 
-See **[DEVICES.md](DEVICES.md)** for the full support matrix, install paths and
-per-board status.
+- **ESP Terminator / any web ESP flasher:** connect the T-Deck over USB-C. If it isn't
+  detected, hold the trackball while pressing reset to enter download mode. Pick the
+  `.bin`, set the address to **0x0**, and flash.
+- **Arduino app (esptool):** with the board on USB:
+  ```
+  esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 scooby-deck-tdeckplus-v0.1.1-merged.bin
+  ```
+- Check the download against the SHA-256 in the release notes.
+- Press reset after flashing.
 
-- LilyGo T-Deck / T-Deck Plus: env `LilyGo_TDeck_companion_radio_touch` (stable)
-- Heltec V4 + TFT + CHSC6x touch: env `heltec_v4_tft_companion_radio_usb_tcp_touch` (stable)
-- Tanmatsu (ESP32-P4): built from `tanmatsu/` (ESP-IDF), ships via the Tanmatsu app store; [sideload guide](TANMATSU_SIDELOAD.md) for running your own build
-- Elecrow ThinkNode M9: env `ThinkNode_M9_companion_radio_touch` (beta); [keyboard & d-pad guide](THINKNODE_M9_SHORTCUTS.md)
-- RAK WisMesh Tap V2 (RAK3312): env `rak_tap_v2_companion_radio_touch` (beta)
-- LilyGo T-Lora Pager: envs `tlora_pager_lr1121_companion_radio_touch` / `tlora_pager_sx1262_companion_radio_touch` (beta); [keyboard shortcuts](TLORA_PAGER_SHORTCUTS.md)
-- Heltec V4-R8 + Expansion Kit V2: env `heltec_v4_r8_tft_companion_radio_usb_tcp_touch` (beta)
-- LilyGo T-Display P4: built from `tdisplay_p4/` (ESP-IDF); AMOLED + SX1262 by default, with `WADA_P4_LCD=1` for TFT-LCD and `WADA_P4_LR2021=1` for LR2021 (beta)
-- Seeed SenseCAP Indicator D1L: env `sensecap_indicator_companion_radio_touch` (experimental, community port, PR #682)
-- Elecrow CrowPanel Advanced 10.1 (ESP32-P4): built from `crowpanel_p4_101/` (ESP-IDF), one image per board revision with `WADA_CP_REV=1.0|1.1|1.2` (experimental, not yet tested on hardware; requires an SX1262 in the wireless slot)
-- Attaky Mesh Series: env `attaky_mesh_series_companion_radio_touch` (beta)
-- Elecrow CrowPanel Advance 3.5: env `crowpanel_35_companion_radio_touch` (beta, hardware validation pending; requires an SX1262 in the expansion slot)
-- Elecrow CrowPanel Advance 5.0: env `crowpanel_50_companion_radio_touch` (beta, hardware validation pending; requires an SX1262 in the wireless slot and the DIP switch set to it)
-
-## Architecture
-
-This repo holds only the **app**: the `companion_radio` glue, the `ui-touch`
-LVGL UI, each board's glue/variants, and `platformio.ini`. The **MeshCore
-core is not vendored here**: it's pulled as a library via `lib_deps` from the
-[`ALLFATHER-BV/meshcomod`](https://github.com/ALLFATHER-BV/meshcomod) monorepo
-(the same repo as the non-touch firmware), pinned by a lean source-only `core-*`
-git tag. The touch-app files this repo owns (TouchPrefsStore, WifiRuntimeStore,
-the transports, …) are dropped from the lib via `-DMC_VENDORED_TOUCH_APP` so they
-aren't compiled twice. The build is byte-identical to the original in-tree
-meshcomod firmware.
-
-Lua apps use the on-device SDK described in [LUA_APPS.md](LUA_APPS.md). For
-WAV/MP3 playback, including a ready-to-sideload transport test app and exact SD
-and internal-storage paths, see [AUDIO_PLAYBACK_TESTING.md](AUDIO_PLAYBACK_TESTING.md).
-Region discovery, known-region management, and per-channel flood scopes are
-described in [REGIONS.md](REGIONS.md).
-
-## Offline map tiles
-
-Builds with a microSD card expose a **Transfer** app for authenticated browser
-uploads over the local Wi-Fi network. WadaMesh accepts unpacked 256x256 PNG XYZ
-tiles in a `z/x/y.png` directory tree.
-
-PNG raster tiles can also be packed as PMTiles v3 archives and copied to the
-SD card as `maps/<name>/<name>.pmtiles`; the archive basename must match its
-directory, e.g. `maps/osm/osm.pmtiles` or `maps/osm-light/osm-light.pmtiles`.
-Enable **Tiles from SD card**, then pick the archive under **Map options → Map
-file**; the choice is remembered across restarts. Without a saved choice the
-`osm` archive is used if present, otherwise the first one found. Archives are
-read-only; tiles missing from the selected archive still load from the
-`maps/osm/z/x/y.png` or `/tiles/z/x/y.jpg` layouts and the normal Wi-Fi tile
-fallback, and **Folder tiles only** turns archives off. JPEG and vector
-PMTiles archives are not supported. An archive larger than 4 GB needs an exFAT
-card (FAT32 cannot hold a file that size); any size works there.
-
-Picking an archive moves the zoom into its range if it is outside. With
-**Tiles from SD card** on, **Map options → Zoom: map levels only** limits the
-zoom slider and +/- buttons to the levels the map actually holds: the selected
-archive's zoom range, or with **Folder tiles only** every `z` folder of the
-`maps/osm/z/x/y` and `tiles/z/x/y` trees.
-
-To create a compatible pack with [QGIS](https://qgis.org/):
-
-1. Add a map source whose licence and service terms explicitly permit offline
-  or bulk use. A self-hosted source is also suitable. Do **not** bulk-download
-  from `tile.openstreetmap.org`: the official
-  [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/)
-  prohibits offline downloads from that community service.
-2. Frame only the area needed in the QGIS map canvas. Tile counts quadruple at
-  every added zoom level, so a small region and a practical range such as
-  zoom 8 through 16 are preferable to exporting an entire country at zoom 19.
-3. Open **Processing Toolbox → Raster tools → Generate XYZ tiles (Directory)**.
-4. Use the map-canvas extent, choose minimum and maximum zooms within 3–19,
-  select **PNG**, set tile width and height to **256**, leave **Use inverted
-  tile Y axis (TMS conventions)** disabled, and select an output directory.
-5. Confirm the output contains paths such as `12/2048/1362.png`. If obtaining
-  an existing pack instead, extract it first and confirm it has the same XYZ
-  directory layout and that its provider permits offline use and redistribution.
-
-To upload the pack:
-
-1. Connect the device and the browser to the same Wi-Fi network.
-2. Open **Transfer** from the device's app drawer, visit the displayed URL, and
-  enter the six-digit session code.
-3. Choose **Offline OSM map (/tiles)**, select the generated output folder, and
-  start the upload. The browser ignores unrelated files and uploads valid tiles
-  sequentially while preserving their coordinates.
-4. Existing tiles are skipped by default, allowing an interrupted upload to be
-  resumed. Enable **Replace existing map tiles** when intentionally refreshing
-  a pack.
-5. Close Transfer after completion. In **Map options**, disable **Topographic
-  map** and enable **Tiles from SD card**. Disable Wi-Fi to verify that the
-  uploaded area renders offline.
-
-Individual PNG tiles must be no larger than 256 KB. Keep the map provider's
-required attribution and licence information with any pack you distribute.
-
-## Build
-
-[PlatformIO](https://platformio.org/) pulls the core fork and all libraries
-automatically:
-
-```bash
-pio run -e heltec_v4_tft_companion_radio_usb_tcp_touch   # Heltec V4 TFT
-pio run -e LilyGo_TDeck_companion_radio_touch            # LilyGo T-Deck
-pio run -e crowpanel_35_companion_radio_touch             # CrowPanel Advance 3.5
-pio run -e crowpanel_50_companion_radio_touch             # CrowPanel Advance 5.0
-# or just `pio run` to build the configured default environments
+Build it yourself (PlatformIO):
+```
+pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin
+# -> .pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin
 ```
 
-Flash with the NVS-preserving 4-component chain (bootloader / partitions /
-boot_app0 / firmware at `0x0 / 0x8000 / 0xe000 / 0x10000`) so saved Wi-Fi
-credentials survive, not a merged image, which 0xFF-pads and wipes NVS.
+## Test notes (v0.1.1): Shared SF Off, MediumSlow slot 48
+Set the T-Deck and the Meshtastic node the same way:
 
-## Contributing
+| Setting | Value |
+|---|---|
+| Region | US |
+| LoRa preset | MediumSlow (BW 250, SF10, CR 4/5) |
+| Frequency slot | 48 = 913.875 MHz (override frequency 0) |
+| Primary channel | name `MediumSlow` or blank, PSK default `AQ==` |
+| Shared SF (T-Deck) | **Off** (any other value moves Meshtastic off SF10) |
+| Other | TX enabled, no ham mode, IQ not inverted |
 
-Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). One topic per
-PR; inbound contributions are accepted under the project's GPL-3.0 license.
+On the dashboard, check `[MT ] 913.875 BW250 SF10 MediumSlow` and `MY HASH 0x18`. Then send
+from the other node, first in Dual mode, then in Meshtastic-only
+(Settings > Mesh > Radio & Mesh > Radio time-sharing).
 
-## License
+### `[MTRX]` counter guide
+| Counter | Meaning |
+|---|---|
+| `PRE` / `HDR` | A Meshtastic preamble / a valid header was heard |
+| `HDRERR` | Header error |
+| `CRC` | Frame received with a CRC error (dropped) |
+| `RAW` | Frames passed to the Meshtastic decoder |
+| `OK` | Decoded with a channel key (or our key, for DMs) |
+| `NOKEY` | No channel matches this channel hash, and no key opened it |
+| `BADDEC` | A channel hash matched, but decryption didn't give a valid packet |
+| `FALLBK` | Opened by a key whose hash didn't match (name mismatch, same key) |
+| `PKI?` | A DM for another node, or the sender's key is unknown |
+| `DUP` | Relayed copies of a frame already seen |
+| `CADMISS` | Channel-activity hit with no preamble after it (noise) |
+| `LAST` | Age, RSSI, SNR and length of the last Meshtastic frame |
+| `FROM` / `HASH` / `PORT` | Sender, channel hash and port of the last frame |
+| `MY HASH` | Our primary channel hash (MediumSlow + AQ== = 0x18) |
+| `REARM` / `LEVEL-IRQ` | RX watchdog re-arms / IRQs caught by level polling |
 
-**GPL-3.0-or-later**: see [LICENSE](LICENSE). wadamesh is copyleft: anyone who
-distributes a build or a fork must also make their source available under the GPL.
-This keeps the UI open and concentrates community effort instead of fragmenting it
-into closed forks.
+How to read them:
+- `PRE` and `HDR` stay at 0 near a sending node: radio-level problem.
+- `CRC` rising: signal or corruption.
+- `NOKEY` / `BADDEC` rising: channel name or key mismatch.
+- `OK` rising but no chat: UI problem.
 
-wadamesh incorporates and depends on
-[MeshCore](https://github.com/meshcore-dev/MeshCore) (MIT, © Scott Powell /
-rippleradios.com) and other third-party components; see [NOTICE](NOTICE) for the
-full list and their licenses. MeshCore-derived files keep their MIT notices; the
-combined work is distributed under the GPL (MIT is GPL-compatible). The MeshCore
-fork that wadamesh builds against stays **MIT** on purpose, so its Wi-Fi/BLE hooks
-remain upstreamable to MeshCore.
+The USB serial log (115200 baud) prints one `[mt]` / `[dualmesh]` line per frame.
+
+## Changes
+See [SCOOBY_DECK.md](SCOOBY_DECK.md) for the source layout and the per-version change notes.
+
+## License and credits
+GPL-3.0-or-later; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Under the GPL, anyone who
+gets the firmware is entitled to this source.
+
+- **WadaMesh**: ALLFATHER-BV and the wadamesh contributors, GPL-3.0 (base firmware and UI)
+- **SquachWatch-CYD**: skizzophrenic, GPL-3.0 (dual-mesh scheduler, Meshtastic codec, crypto, DMs)
+- **MeshCore**: Scott Powell / ripplebiz, MIT
+- **Meshtastic**: Meshtastic LLC and contributors, GPL-3.0 (protocol)
+
+No warranty. Check your local radio rules before transmitting.
