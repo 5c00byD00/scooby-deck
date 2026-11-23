@@ -268,6 +268,8 @@ void poll() {
     Lora::Packet pk;
     for (int k = 0; k < 4 && s_radio->popMeshtastic(pk); k++) handle(pk);
     dmJobs();
+    // First NodeInfo ~30 s after boot, then every 3 h (not in MeshCore-only mode).
+    if (cfg().mode != MODE_MESHCORE && millis() > 30000) announceIfDue();
     saveIfDirty();
 }
 

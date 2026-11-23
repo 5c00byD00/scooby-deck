@@ -926,9 +926,18 @@ void setup() {
     // whose DISPLAY_CLASS is a core driver the 1.17 core's palette makes that WHITE
     // (the boot logo grew a white border). Graphical pre-LVGL screens stay dark.
     display.startFrame((ColorVal)0x0000);
+#if defined(SCOOBY_DECK)
+    // Scooby Deck: terminal green on black until the LVGL banner takes over.
+    display.setColor((ColorVal)0x07E8);
+    display.setTextSize(2);
+    display.drawTextCentered(display.width() / 2, display.height() / 2 - 16, "SCOOBY DECK");
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, display.height() / 2 + 10, "> booting dual mesh_");
+#else
     display.writePixelsRGB565((display.width()  - WADAMESH_MARK_W) / 2,
                               (display.height() - WADAMESH_MARK_H) / 2,
                               WADAMESH_MARK_W, WADAMESH_MARK_H, WADAMESH_MARK_RGB565);
+#endif
     display.endFrame();
 #endif
   }

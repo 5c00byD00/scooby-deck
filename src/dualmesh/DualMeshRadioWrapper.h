@@ -56,6 +56,10 @@ public:
     // Hide the base's direct-SPI helpers: the radio task applies them.
     void     setTxPower(int8_t dbm);
     uint32_t getRngSeed();
+    // WadaMesh's buffered-receive drain task would race the dual-mesh task
+    // for the chip: the radio task already buffers, so keep it off.
+    void     rxQueueEnable(bool) {}
+    bool     rxQueueEnabled() const { return false; }
 
     // DualMesh side
     // The spectrum analyser drives the chip itself: park the task first.

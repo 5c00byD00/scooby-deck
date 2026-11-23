@@ -9442,8 +9442,21 @@ enum {
   CAT_LANGUAGE,      // UI language picker
   CAT_MQTT,          // MQTT bridge — broker host/port/credentials
   CAT_APPPERMS,      // what each Lua app is allowed to do, and taking it back
+#if defined(SCOOBY_DECK)
+  CAT_SCOOBY,        // Scooby Deck: dual mesh, Meshtastic radio/channels, names, theme
+#endif
   CAT_COUNT
 };
+#if defined(SCOOBY_DECK)
+#include "../dualmesh/DualMeshConfig.h"
+#include "../dualmesh/DualMeshMt.h"
+#include "../dualmesh/ScoobyVersion.h"
+static void buildScoobySettings();   // ScoobyDeckUi.inc
+static void scoobyOpenDashboard();
+static void scoobyOpenMtChats();
+static void scoobyBootDashboard();
+static void applyTerminalTheme();
+#endif
 struct SettingsCatDef { const char* label; const char* icon; };
 #if CAP_LUA_APPS
 // Built-in tile hide bits (app_hide pref). Order is FROZEN — append only.
@@ -9484,6 +9497,9 @@ static const SettingsCatDef kSettingsCats[CAT_COUNT] = {
   { "Language",      UI_ICON_LANGUAGES },
   { "MQTT bridge",   UI_ICON_SHARE_2 },
   { "App permissions", UI_ICON_SHIELD_CHECK },
+#if defined(SCOOBY_DECK)
+  { "Scooby Deck",   UI_ICON_RADIO_TOWER },
+#endif
 };
 // Which slice of the (formerly monolithic) Device settings a builder emits. One
 // detail page per section; buildDeviceSettings(sec) emits only that section's
@@ -45989,6 +46005,9 @@ static void settingsCatBuild(int cat) {
 #endif
       break;
     case CAT_DEVICE:       buildAboutSettings(); break;
+#if defined(SCOOBY_DECK)
+    case CAT_SCOOBY:       buildScoobySettings(); break;
+#endif
   }
   s_settings_inline_parent = nullptr;
 }
@@ -46220,7 +46239,11 @@ static const SettingsGroupDef kSettingsGroups[] = {
   // Device leads on its own, untitled (#596): its state names the hardware, so a
   // wrongly-set variant is visible before anyone opens a page.
   { "",            { CAT_DEVICE }, 1 },
+#if defined(SCOOBY_DECK)
+  { "Mesh",        { CAT_SCOOBY, CAT_PROFILE, CAT_RADIO, CAT_AUTOADD, CAT_QUICKREPLIES }, 5 },
+#else
   { "Mesh",        { CAT_PROFILE, CAT_RADIO, CAT_AUTOADD, CAT_QUICKREPLIES }, 4 },
+#endif
   { "Connections", { CAT_WIFI, CAT_BLUETOOTH, CAT_GPS, CAT_MQTT }, 4 },
   { "Display & lock", { CAT_DISPLAY, CAT_THEME, CAT_LOCK, CAT_SOUND, CAT_KEYBOARD, CAT_LANGUAGE,
                      CAT_CLOCK, CAT_BATTERY, CAT_SENSORS }, 9 },
@@ -46240,6 +46263,9 @@ static uint32_t settingsCatHue(int c) {
   }
   switch (c) {
     case CAT_RADIO:                                        return COLOR_HUE[HUE_RADIO];
+#if defined(SCOOBY_DECK)
+    case CAT_SCOOBY:                                       return COLOR_HUE[HUE_RADIO];
+#endif
     case CAT_PROFILE: case CAT_AUTOADD: case CAT_QUICKREPLIES: return COLOR_HUE[HUE_MSG];
     case CAT_WIFI: case CAT_BLUETOOTH: case CAT_GPS: case CAT_MQTT: return COLOR_HUE[HUE_PLACE];
     case CAT_GENERAL: case CAT_BACKUPS: case CAT_APPPERMS: case CAT_DEVICE:
@@ -46280,6 +46306,11 @@ static void settingsCatValue(int c, char* out, size_t cap) {
     case CAT_RADIO:
       if (NodePrefs* np = the_mesh.getNodePrefs()) snprintf(out, cap, "%.3f MHz", (double)np->freq);
       break;
+#if defined(SCOOBY_DECK)
+    case CAT_SCOOBY:
+      snprintf(out, cap, "%s", DualMesh::modeName(DualMesh::cfg().mode));
+      break;
+#endif
 #if defined(ESP32) && defined(MULTI_TRANSPORT_COMPANION)
     case CAT_WIFI:
       if (!wifiConfigWantsWifi())               snprintf(out, cap, "%s", TR("Off"));
@@ -61975,12 +62006,15 @@ static void openUsbFilesPage() {
 // home's "Apps" button opens it; its own "Home" button (and the back key) close
 // it, revealing the command centre. Built as a self-contained lv_layer_top
 // overlay (NOT the T-Deck-only openFullscreenView) so it compiles on both boards.
+#include "ScoobyDeckUi.inc"
+
 enum AppDrawerAction {
   APPACT_CHATS, APPACT_CONTACTS, APPACT_MAP, APPACT_SETTINGS,
   APPACT_ADVERT, APPACT_POWER, APPACT_MENTIONS, APPACT_CMDCENTER, APPACT_SIGNAL,
   APPACT_TERMINAL, APPACT_FILES, APPACT_FILE_TRANSFER, APPACT_SPECTRUM, APPACT_SNAKE, APPACT_VNC, APPACT_REMOTE, APPACT_READER,
   APPACT_DISCOVER, APPACT_STORE,
   APPACT_USB_FILES,
+  APPACT_SCOOBY_DASH, APPACT_MT_CHATS,
   APPACT_LUA_BASE = 100,   // APPACT_LUA_BASE + i = installed Lua app s_lua_inst[i]
 };
 // The drawer's built-in tiles, which are also what an App widget on Home can open.
@@ -61989,6 +62023,10 @@ enum AppDrawerAction {
 struct AppTileDef { const char* icon; const char* label; uint8_t act; uint8_t hue; };
 static constexpr uint8_t kAppHueDanger = 0xFF;
 static const AppTileDef k_app_tiles[] = {
+#if defined(SCOOBY_DECK)
+  { UI_ICON_SQUARE_TERMINAL,    "Dashboard", APPACT_SCOOBY_DASH, HUE_RADIO },   // Scooby Deck status
+  { UI_ICON_MESSAGE_SQUARE,     "Mtastic",   APPACT_MT_CHATS,  HUE_MSG },       // Meshtastic chats
+#endif
   { UI_ICON_MESSAGE_SQUARE,     "Chats",     APPACT_CHATS,     HUE_MSG },
   { UI_ICON_USER,               "Contacts",  APPACT_CONTACTS,  HUE_PEOPLE },
   { UI_ICON_AT_SIGN,            "Mentions",  APPACT_MENTIONS,  HUE_MSG },
@@ -62389,6 +62427,10 @@ static void appLaunch(int act, lv_event_t* e) {
     case APPACT_CMDCENTER: setHomeDrawer(false);  return;   // back to the Home widgets
     case APPACT_SIGNAL:    openSignalInfoPopup(); return;   // signal/traffic + auto-discover settings
     case APPACT_SPECTRUM:  openSpectrumPage();   return;   // swept RF spectrum analyzer (borrows the radio)
+#if defined(SCOOBY_DECK)
+    case APPACT_SCOOBY_DASH: scoobyOpenDashboard(); return;
+    case APPACT_MT_CHATS:    scoobyOpenMtChats();   return;
+#endif
     case APPACT_DISCOVER:  openDiscoverPage();   return;   // active node-discovery sweep + nearby list
 #if !defined(HAS_TANMATSU)
     case APPACT_VNC:       openRemotePage();     return;   // the screen mirror is now the web console's Screen tab
@@ -70282,6 +70324,9 @@ static void splashRemove() {
   lv_obj_del(s_splash_root);
   s_splash_root = nullptr;
   s_splash_mark = s_splash_wm = s_splash_sub = nullptr;
+#if defined(SCOOBY_DECK)
+  scoobyBootDashboard();
+#endif
 }
 
 static void splashTapDismissCb(lv_event_t* e) {
@@ -70297,6 +70342,9 @@ static void splashTapDismissCb(lv_event_t* e) {
   lv_obj_del_async(s_splash_root);
   s_splash_root = nullptr;
   s_splash_mark = s_splash_wm = s_splash_sub = nullptr;
+#if defined(SCOOBY_DECK)
+  scoobyBootDashboard();
+#endif
 }
 
 static float splashClamp01(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
@@ -70495,6 +70543,37 @@ static void buildBootSplash() {
   lv_obj_move_foreground(s_splash_root);
   lv_obj_add_event_cb(s_splash_root, splashTapDismissCb, LV_EVENT_CLICKED, nullptr);
 
+#if defined(SCOOBY_DECK)
+  {
+    // Scooby Deck: an ASCII banner on the terminal black, no mesh mark.
+    s_splash_clock = 0;
+    s_splash_born = s_splash_last = millis();
+    s_splash_timer = lv_timer_create(splashTickCb, 30, nullptr);
+    lv_obj_t* art = s_splash_wm = lv_label_create(s_splash_root);
+    lv_label_set_text(art,
+      " ___  ___ ___   ___  _____   __\n"
+      "/ __|/ __/ _ \\ / _ \\| _ ) \\ / /\n"
+      "\\__ \\ (_| (_) | (_) | _ \\\\ V / \n"
+      "|___/\\___\\___/ \\___/|___/ |_|  \n"
+      "     ___  ___ ___ _  __\n"
+      "    |   \\| __/ __| |/ /\n"
+      "    | |) | _| (__| ' < \n"
+      "    |___/|___\\___|_|\\_\\");
+    lv_obj_set_style_text_font(art, &lv_font_unscii_8, LV_PART_MAIN);
+    lv_obj_set_style_text_color(art, lv_color_hex(0x00FF41), LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(art, 2, LV_PART_MAIN);
+    lv_obj_align(art, LV_ALIGN_CENTER, 0, -22);
+    lv_obj_t* sub = s_splash_sub = lv_label_create(s_splash_root);
+    lv_label_set_text(sub, "> DUAL MESH v" SCOOBY_DECK_VERSION "  MESHCORE + MESHTASTIC\n"
+                           "> BASED ON WADAMESH + SQUACHWATCH (GPL-3.0)_");
+    lv_obj_set_style_text_font(sub, &lv_font_unscii_8, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sub, lv_color_hex(0x00B32D), LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(sub, 3, LV_PART_MAIN);
+    lv_obj_align(sub, LV_ALIGN_CENTER, 0, 62);
+    (void)ground; (void)ink; (void)quiet;
+    return;
+  }
+#endif
   // The mark: the pre-LVGL bitmap's box (154 x 98), centred to the same pixel.
   s_splash_mark = lv_obj_create(s_splash_root);
   lv_obj_remove_style_all(s_splash_mark);
@@ -71428,6 +71507,9 @@ static void applyBootTheme() {
 #endif
   s_chat_icons_initials = touchPrefsGetChatIcons() != 0;
   bgTheme();   // last: it may change the background colour
+#if defined(SCOOBY_DECK)
+  applyTerminalTheme();   // Scooby Deck: green-on-black over whatever was picked
+#endif
 }
 
 // Theme apply callback: runs for every object as it's created (chained after the
