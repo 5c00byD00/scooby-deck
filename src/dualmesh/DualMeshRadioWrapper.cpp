@@ -254,9 +254,41 @@ bool DualMeshRadioWrapper::popMeshtastic(Lora::Packet& pk) {
     return got;
 }
 
+// ---- Dual mode, v0.1.2: RX windows ------------------------------------------
+// v0.1.0/v0.1.1 looked at Meshtastic with a 2-symbol CAD (peak SF+16). On the
+// T-Deck Plus that CAD fired on noise on more than half the looks and almost
+// never on the real preamble (bench, 2026-11-23: CAD 388/687, PRE 2 in minutes,
+// a Heltec 1-2 m away missed). Now Dual alternates two plain RX windows and lets
+// the SX1262's own preamble detector decide, the way Meshtastic-only mode
+// listens. A window that hears a preamble stays until the header / frame.
+//
+// Guarantee: a preamble of P ms overlaps a window of W repeating every T by at
+// least W + P - T. With MediumSlow (P = 16 x 4.1 = 65.5 ms) and MeshCore SF7/
+// BW62.5 (P = 32 x 2.05 = 65.5 ms), MT 40 ms + MC 31 ms + ~2 x 3 ms switching
+// gives T ~ 77: >= 28 ms (~7 symbols) of every Meshtastic preamble and >= 19 ms
+// (~9 symbols) of every MeshCore preamble land inside a window.
+static const uint32_t SWITCH_MS = 3;
+static uint32_t detectMs(const RadioProfile& p, uint32_t syms) { return (symUs(p) * syms) / 1000; }
+uint32_t DualMeshRadioWrapper::mtWindowMs() const {
+    const uint32_t dMt = detectMs(_mt, 6), dMc = detectMs(_mc, 6);
+    const uint32_t pMc = detectMs(_mc, _mc.preamble);
+    uint32_t w = dMt + 15;                                  // MS: 24.6 + 15 = 40 ms
+    const uint32_t mcCap = pMc > dMc + 2 * SWITCH_MS ? pMc - dMc - 2 * SWITCH_MS : 0;
+    if (w > mcCap) w = mcCap > dMt + 6 ? mcCap : dMt + 6;  // keep MeshCore's preambles covered when possible
+    return w < 20 ? 20 : w;
+}
+bool DualMeshRadioWrapper::cadLooks() const {
+    const uint8_t c = DualMesh::cfg().tdm_cad_syms;
+    return c == 2 || c == 4 || c == 8;                      // legacy CAD peeks, opt-in
+}
 uint32_t DualMeshRadioWrapper::homeMs() const {
     const Config& c = DualMesh::cfg();
     if (c.tdm_home_ms >= 10) return c.tdm_home_ms;
+    if (!cadLooks()) {
+        const uint32_t pMt = detectMs(_mt, _mt.preamble), dMt = detectMs(_mt, 6);
+        const int32_t w = (int32_t)pMt - (int32_t)dMt - (int32_t)(2 * SWITCH_MS) - 4;   // MS: 31 ms
+        return w < 20 ? 20u : (uint32_t)w;
+    }
     const RadioProfile& pk = _mt;
     const uint32_t lock = (symUs(pk) * (cadSymbols(pk) + 8u)) / 1000;
     const int32_t ms = (int32_t)preambleMs(pk) - (int32_t)lock - 15 - (int32_t)cadMs(pk) - 6;
@@ -667,7 +699,10 @@ void DualMeshRadioWrapper::taskBody() {
         else if (mode == MODE_MESHTASTIC) listen(ON_MESHTASTIC, 100);
         else {
             listen(ON_MESHCORE, homeMs());
-            if (!mcTxWanted() && !_paused && !_off && !_cfgDirty) peek();
+            if (!mcTxWanted() && !_paused && !_off && !_cfgDirty) {
+                if (cadLooks()) peek();
+                else { _st.peeks++; listen(ON_MESHTASTIC, mtWindowMs()); }
+            }
         }
     }
 }

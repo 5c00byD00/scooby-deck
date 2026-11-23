@@ -5,9 +5,12 @@ receives on **both MeshCore and Meshtastic with one SX1262 radio**. It is a fork
 [WadaMesh](README.wadamesh.md) (ALLFATHER-BV), with the dual-mesh time-slicing from
 SquachWatch-CYD (skizzophrenic).
 
-> **Status:** v0.1.1 is an early build. Its Meshtastic RX fix came from code review
-> and **hasn't been tested on hardware yet**. Please report what the dashboard's
-> `[MTRX]` counters show (see below).
+> **Status:** early firmware. **v0.1.1** is the latest stable release.
+> Test builds are published as **alpha pre-releases** (`vX.Y.Z-alpha.N`), and the rolling
+> **`nightly`** pre-release always has the newest `main` build at a fixed URL:
+> https://github.com/5c00byD00/scooby-deck/releases/download/nightly/scooby-deck-tdeckplus-nightly-merged.bin
+> Alpha and nightly builds haven't been tested on hardware. Please report what the
+> dashboard's `[MTRX]` counters show (see below).
 
 ## Features
 - **Mesh modes:** Dual (default: MeshCore listens full-time, with short Meshtastic listens),
@@ -85,7 +88,9 @@ from the other node, first in Dual mode, then in Meshtastic-only
 | `FALLBK` | Opened by a key whose hash didn't match (name mismatch, same key) |
 | `PKI?` | A DM for another node, or the sender's key is unknown |
 | `DUP` | Relayed copies of a frame already seen |
-| `CADMISS` | Channel-activity hit with no preamble after it (noise) |
+| `SELF` | Our own packets relayed back by a neighbour (dropped; proves the link both ways) |
+| `MT-WIN` / `[TDM ]` | Dual mode: Meshtastic RX windows opened, and the MC / MT window lengths |
+| `CADMISS` | Only in the old CAD-look mode: a CAD hit with no preamble after it (noise) |
 | `LAST` | Age, RSSI, SNR and length of the last Meshtastic frame |
 | `FROM` / `HASH` / `PORT` | Sender, channel hash and port of the last frame |
 | `MY HASH` | Our primary channel hash (MediumSlow + AQ== = 0x18) |

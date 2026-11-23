@@ -180,8 +180,15 @@ static void dashFill() {
   sdBar(bar, s_sd_cpu, 10);
   p += snprintf(p, e - p, "[CPU  ] %3u%%  %s\n", s_sd_cpu, bar);
   const RadioStats st = radio_driver.stats();
-  p += snprintf(p, e - p, "[RX   ] MC %lu  MT %lu  CAD %lu/%lu\n", (unsigned long)st.mcRx, (unsigned long)st.mtRx,
-                (unsigned long)st.cadHits, (unsigned long)st.peeks);
+  if (radio_driver.cadLooks())
+    p += snprintf(p, e - p, "[RX   ] MC %lu  MT %lu  CAD %lu/%lu\n", (unsigned long)st.mcRx, (unsigned long)st.mtRx,
+                  (unsigned long)st.cadHits, (unsigned long)st.peeks);
+  else
+    p += snprintf(p, e - p, "[RX   ] MC %lu  MT %lu  MT-WIN %lu\n", (unsigned long)st.mcRx, (unsigned long)st.mtRx,
+                  (unsigned long)st.peeks);
+  if (c.mode == MODE_DUAL)
+    p += snprintf(p, e - p, "[TDM  ] RX WINDOWS MC %lums / MT %lums%s\n", (unsigned long)radio_driver.homeMs(),
+                  (unsigned long)radio_driver.mtWindowMs(), radio_driver.cadLooks() ? " (CAD LOOKS)" : "");
   p += snprintf(p, e - p, "[TX   ] MC %lu  MT %lu  FAIL %lu  NOISE %d\n", (unsigned long)st.mcTx, (unsigned long)st.mtTx,
                 (unsigned long)(st.mcTxFail + st.mtTxFail), (int)st.noise);
   // Meshtastic RX debug (v0.1.1): radio events -> frames -> decode results.
@@ -191,8 +198,10 @@ static void dashFill() {
                   (unsigned long)st.mtHdr, (unsigned long)st.mtHdrErr, (unsigned long)st.mtCrcErr);
     p += snprintf(p, e - p, "[MTRX ] RAW %lu OK %lu NOKEY %lu BADDEC %lu\n", (unsigned long)dg.frames,
                   (unsigned long)dg.decoded, (unsigned long)dg.noKey, (unsigned long)dg.badDecrypt);
-    p += snprintf(p, e - p, "[MTRX ] FALLBK %lu PKI? %lu DUP %lu CADMISS %lu\n", (unsigned long)dg.fallback,
-                  (unsigned long)dg.pkiOther, (unsigned long)dg.dupes, (unsigned long)st.cadMiss);
+    p += snprintf(p, e - p, "[MTRX ] FALLBK %lu PKI? %lu DUP %lu SELF %lu\n", (unsigned long)dg.fallback,
+                  (unsigned long)dg.pkiOther, (unsigned long)dg.dupes, (unsigned long)dg.self);
+    if (radio_driver.cadLooks())
+      p += snprintf(p, e - p, "[MTRX ] CADMISS %lu\n", (unsigned long)st.cadMiss);
     if (st.mtLastMs) {
       p += snprintf(p, e - p, "[MTRX ] LAST %lus AGO RSSI %d SNR %.1f LEN %u\n",
                     (unsigned long)((millis() - st.mtLastMs) / 1000), (int)st.mtLastRssi,
@@ -788,10 +797,10 @@ static void sdBuildMtRadioCard() {
     lv_textarea_set_accepted_chars(s_sd_dbm_ta, "-0123456789");
     sdSetNum(s_sd_dbm_ta, c.mt_tx_dbm);
     s_sd_ann_sw = setSwitchRow(card, "Announce NodeInfo", "Every 3 h and before DMs, so others see your name and key", c.mt_announce != 0, nullptr);
-    s_sd_home_ta = setNumFieldRow(card, "TDM home time (ms)", "Time on MeshCore between peeks. 0 = auto", 4);
+    s_sd_home_ta = setNumFieldRow(card, "TDM MeshCore window (ms)", "Dual: MeshCore RX time between Meshtastic windows. 0 = auto (31 ms at MediumSlow)", 4);
     lv_textarea_set_accepted_chars(s_sd_home_ta, "0123456789");
     sdSetNum(s_sd_home_ta, c.tdm_home_ms);
-    s_sd_cad_ta = setNumFieldRow(card, "TDM CAD symbols", "0 = auto (2 at SF10+, else 4)", 2);
+    s_sd_cad_ta = setNumFieldRow(card, "TDM look mode", "0 = RX windows (default, v0.1.2). 2/4/8 = old CAD peeks with that many symbols", 2);
     lv_textarea_set_accepted_chars(s_sd_cad_ta, "0123456789");
     sdSetNum(s_sd_cad_ta, c.tdm_cad_syms);
     setNote(card, "Meshtastic never rebroadcasts from this node (client-mute). Default: MediumSlow, slot 48 = 913.875 MHz.");

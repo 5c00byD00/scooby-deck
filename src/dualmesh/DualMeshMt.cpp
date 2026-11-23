@@ -196,6 +196,14 @@ static void handle(const Lora::Packet& pk) {
     s_diag.frames++;
     if (!decode(pk, d)) { s_diag.badHeader++; Serial.printf("[mt] bad header len=%u\n", (unsigned)pk.len); return; }
     const Header& h = d.hdr;
+    if (h.from == s_me) {
+        // Our own frame, relayed back by a neighbour: proof the neighbour heard
+        // us and that we hear it, but not traffic. Counted, never shown/stored.
+        s_diag.self++;
+        Serial.printf("[mt] SELF echo id=%08lx hash=0x%02x rssi=%d (relayed by a neighbour)\n",
+                      (unsigned long)h.id, h.channelHash, (int)pk.rssi);
+        return;
+    }
     s_diag.lastHash = h.channelHash; s_diag.lastFrom = h.from; s_diag.lastMs = millis();
     if (d.haveData) {
         s_diag.decoded++;

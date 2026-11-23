@@ -89,6 +89,8 @@ public:
     DualMesh::RadioProfile mcProfile() const { return _mc; }
     DualMesh::RadioProfile mtProfile() const { return _mt; }
     uint32_t homeMs() const;
+    uint32_t mtWindowMs() const;   // Dual: Meshtastic RX window
+    bool     cadLooks() const;     // Dual: legacy CAD peeks instead of RX windows
 
     // internal, used by the task
     void     taskBody();

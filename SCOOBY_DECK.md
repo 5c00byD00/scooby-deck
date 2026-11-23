@@ -61,3 +61,24 @@ UI:
   (Q / Esc / the status-bar chevron) closes them and tab swipes are blocked under them.
 - Terminal theme: the accent colour is bright green, so black text on the accent
   stays readable.
+
+## v0.1.2-alpha.1 (2026-11-23), test build, not yet tested on hardware
+
+Bench result that drove it (v0.1.1, Dual, Heltec 1-2 m away on MediumSlow slot 48):
+CAD 388/687 hits, but only PRE 2 / HDR 1 on the Meshtastic profile, and the only
+frame decoded was our own NodeInfo relayed back by the Heltec (RSSI -27). So the
+radio and decoder work, but the 2-symbol CAD gate (peak SF+16) was the problem:
+it fired on noise on more than half the looks and the real preambles almost never
+got into RX.
+
+- Dual mode no longer gates Meshtastic on CAD. It alternates two plain RX windows
+  (MeshCore 31 ms / Meshtastic 40 ms at MediumSlow, computed from the preambles) and
+  lets the SX1262 preamble detector decide; a window that hears a preamble stays for
+  the header and frame. Window math: every 65.5 ms Meshtastic preamble gets >= ~28 ms
+  (7 symbols) inside an MT window, every MeshCore SF7 preamble >= ~19 ms (9 symbols).
+  The old CAD looks are still there: set "TDM look mode" to 2/4/8.
+- Our own packets relayed back by a neighbour are dropped and counted (SELF).
+- Meshtastic-only mode is continuous RX on the Meshtastic profile and never uses CAD
+  to receive (CAD is only the listen-before-talk check before sending).
+- Dashboard: `[TDM ] RX WINDOWS MC x ms / MT y ms`, `MT-WIN` count, SELF counter;
+  CADMISS only shows in CAD-look mode.
