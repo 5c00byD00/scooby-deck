@@ -1,3 +1,4 @@
+#if defined(SCOOBY_DECK)
 // DualMesh — the time-division radio scheduler. See DualMeshRadioWrapper.h.
 //
 // Timing model (ported from SquachWatch-CYD src/lora_sniffer.cpp, GPL-3.0):
@@ -14,6 +15,7 @@
 #include <Arduino.h>
 #include "DualMeshRadioWrapper.h"
 #include "DualMeshConfig.h"
+#include "DualMeshMt.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -105,6 +107,7 @@ void DualMeshRadioWrapper::begin() {
     chip(_radio)->standby();
     chip(_radio)->setPacketReceivedAction(dmIsr);   // ours, not the base's setFlag
     _rxOn = false;
+    DualMesh::Mt::begin(this);
     if (!s_task) xTaskCreatePinnedToCore(taskEntry, "dualmesh", 6144, this, 10, &s_task, 0);
 }
 
@@ -188,6 +191,7 @@ void DualMeshRadioWrapper::powerOff() {
 void DualMeshRadioWrapper::loop() {
     // Noise floor as MeshCore's Dispatcher wants it, from the task's samples.
     _noise_floor = _st.noise;
+    if (!_paused) DualMesh::Mt::poll();
 }
 
 void DualMeshRadioWrapper::resetAGC() { _agc = true; }
@@ -557,3 +561,4 @@ void DualMeshRadioWrapper::taskBody() {
         }
     }
 }
+#endif  // SCOOBY_DECK

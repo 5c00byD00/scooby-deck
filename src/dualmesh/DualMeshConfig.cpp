@@ -1,3 +1,4 @@
+#if defined(SCOOBY_DECK)
 // DualMesh — settings store. See DualMeshConfig.h.
 #include "DualMeshConfig.h"
 #include "lora_meshtastic.h"
@@ -171,3 +172,4 @@ const char* modeName(uint8_t m) {
 }
 
 }
+#endif  // SCOOBY_DECK

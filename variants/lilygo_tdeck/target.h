@@ -4,6 +4,9 @@
 #include <RadioLib.h>
 #include <helpers/radiolib/RadioLibWrappers.h>
 #include <helpers/radiolib/CustomSX1262Wrapper.h>
+#if defined(SCOOBY_DECK)
+#include "../../src/dualmesh/DualMeshRadioWrapper.h"
+#endif
 #include <TDeckBoard.h>
 #include <helpers/AutoDiscoverRTCClock.h>
 #include "../../src/helpers/ClockFloorRTC.h"   // monotonic send-timestamp floor (issue #89)

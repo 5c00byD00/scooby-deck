@@ -33546,6 +33546,9 @@ static void spectrumRestoreRadio() {
 static void closeSpectrumPage() {
   spectrumRestoreRadio();             // ALWAYS restore before tearing the page down
   radio_driver.rxQueueSuspend(false); // resume the buffered-receive drain task (no-op if off)
+#if defined(SCOOBY_DECK)
+  radio_driver.pauseForSpectrum(false);  // hand the chip back to the dual-mesh task
+#endif
   if (s_spec_timer) { lv_timer_del(s_spec_timer); s_spec_timer = nullptr; }
   if (s_spec_root)  { popupClose(&s_spec_root); }
   s_spec_chart = nullptr; s_spec_ser = nullptr; s_spec_wf = nullptr;
@@ -35422,6 +35425,9 @@ static void openSpectrumPage() {
 #endif
   // Park the buffered-receive drain task while this page drives the raw radio.
   // The acquire/release pair guarantees no drain is mid-flight when we take over.
+#if defined(SCOOBY_DECK)
+  radio_driver.pauseForSpectrum(true);   // the dual-mesh task parks the chip first
+#endif
   radio_driver.radioAcquire();
   radio_driver.rxQueueSuspend(true);
   radio_driver.radioRelease();
