@@ -294,17 +294,24 @@ static lv_obj_t* mtRowBtn(lv_obj_t* parent, const char* text, lv_event_cb_t cb, 
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 6, 0);
   return b;
 }
+// A row's tap rebuilds the page the row is on: do it after the event, never
+// inside the clicked object's own handler.
+static void mtShowAsyncCb(void* v) { if (s_mt_root) mtShow((uint8_t)(uintptr_t)v); }
+static void mtShowLater(uint8_t view) {
+  lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
+  lv_async_call(mtShowAsyncCb, (void*)(uintptr_t)view);
+}
 static void mtChanCb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   s_mt_chan = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-  mtShow(MTV_CHAN);
+  mtShowLater(MTV_CHAN);
 }
-static void mtDmListCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShow(MTV_DMLIST); }
-static void mtNodesCb(lv_event_t* e)  { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShow(MTV_NODES); }
+static void mtDmListCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_DMLIST); }
+static void mtNodesCb(lv_event_t* e)  { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_NODES); }
 static void mtPeerCb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   s_mt_peer = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
-  mtShow(MTV_DM);
+  mtShowLater(MTV_DM);
 }
 
 static void mtAge(uint32_t ms, char* out, size_t cap) {
