@@ -200,6 +200,8 @@ static void dashFill() {
                   (unsigned long)dg.decoded, (unsigned long)dg.noKey, (unsigned long)dg.badDecrypt);
     p += snprintf(p, e - p, "[MTRX ] FALLBK %lu PKI? %lu DUP %lu SELF %lu\n", (unsigned long)dg.fallback,
                   (unsigned long)dg.pkiOther, (unsigned long)dg.dupes, (unsigned long)dg.self);
+    p += snprintf(p, e - p, "[MTRX ] ACKTX %lu ACKRX %lu (ROLE CLIENT_MUTE)\n", (unsigned long)dg.ackTx,
+                  (unsigned long)dg.ackRx);
     if (radio_driver.cadLooks())
       p += snprintf(p, e - p, "[MTRX ] CADMISS %lu\n", (unsigned long)st.cadMiss);
     if (st.mtLastMs) {
@@ -377,7 +379,7 @@ static void mtFillMsgs() {
     const char* st = "";
     if (m.outgoing) {
       if (m.chan == Mt::DM_CHAN) st = m.state == 2 ? " [ACK]" : m.state == 3 ? " [FAIL]" : " [..]";
-      else st = m.state == 3 ? " [FAIL]" : "";
+      else st = m.state == 3 ? " [FAIL]" : m.state == 2 ? " [RELAYED]" : "";
     }
     if (m.outgoing) snprintf(line, sizeof line, "%s> %s%s  %s", who, m.text, st, age);
     else snprintf(line, sizeof line, "<%s> %s  %s %ddB", who, m.text, age, (int)m.rssi);

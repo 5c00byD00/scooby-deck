@@ -82,3 +82,25 @@ got into RX.
   to receive (CAD is only the listen-before-talk check before sending).
 - Dashboard: `[TDM ] RX WINDOWS MC x ms / MT y ms`, `MT-WIN` count, SELF counter;
   CADMISS only shows in CAD-look mode.
+
+## v0.1.2-alpha.2 (2026-11-24), test build, not yet tested on hardware
+
+Bench (alpha.1, Dual): PRE 9 / HDR 9 / OK 9, DMs both ways, and the Heltec
+showed a delivery ACK on DMs. Only channel (broadcast) messages from the Heltec
+show "failed to deliver to mesh".
+
+Why: that is Meshtastic's normal result for a broadcast nobody relays. A sender
+gets an *implicit* ACK for a broadcast only by hearing another node rebroadcast it
+(firmware ReliableRouter::shouldFilterReceived). Scooby Deck is CLIENT_MUTE:
+FloodingRouter::isRebroadcaster() is false for CLIENT_MUTE, and ReliableRouter
+only sends explicit ACKs for want_ack packets addressed to us (DMs), never for
+broadcasts. So with no other relaying node nearby, channel messages show
+"failed to deliver" on the sender even though the T-Deck received them.
+That matches stock firmware for a mute client; it isn't a fault.
+
+- Role: NodeInfo advertises CLIENT_MUTE (User.role = 1), as before. No rebroadcast.
+- DM ACKs: unchanged (they already work).
+- Dashboard: `[MTRX] ACKTX` (Routing ACK/NAKs we sent for DMs to us) and `ACKRX`
+  (ACKs for our DMs, plus implicit ACKs: our channel messages heard relayed).
+- Chats: our channel messages show `[RELAYED]` when a neighbour's rebroadcast was
+  heard (Meshtastic's implicit ACK); DMs keep `[ACK]` / `[FAIL]`.

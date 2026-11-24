@@ -2,4 +2,4 @@
 // (GPL-3.0), MeshCore (MIT) and Meshtastic (GPL-3.0) protocols.
 #pragma once
 #define SCOOBY_DECK_NAME    "Scooby Deck"
-#define SCOOBY_DECK_VERSION "0.1.2"
+#define SCOOBY_DECK_VERSION "0.1.2-alpha.2"

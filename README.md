@@ -89,6 +89,7 @@ from the other node, first in Dual mode, then in Meshtastic-only
 | `PKI?` | A DM for another node, or the sender's key is unknown |
 | `DUP` | Relayed copies of a frame already seen |
 | `SELF` | Our own packets relayed back by a neighbour (dropped; proves the link both ways) |
+| `ACKTX` / `ACKRX` | Routing ACKs we sent for DMs to us / ACKs for our DMs plus implicit ACKs (our channel messages heard relayed) |
 | `MT-WIN` / `[TDM ]` | Dual mode: Meshtastic RX windows opened, and the MC / MT window lengths |
 | `CADMISS` | Only in the old CAD-look mode: a CAD hit with no preamble after it (noise) |
 | `LAST` | Age, RSSI, SNR and length of the last Meshtastic frame |
@@ -103,6 +104,14 @@ How to read them:
 - `OK` rising but no chat: UI problem.
 
 The USB serial log (115200 baud) prints one `[mt]` / `[dualmesh]` line per frame.
+
+## Meshtastic role and delivery status
+Scooby Deck is a **CLIENT_MUTE** Meshtastic node: it never rebroadcasts.
+- **DMs** get a Routing ACK, so the sender sees them delivered.
+- **Channel messages** are broadcasts. A Meshtastic sender only marks a broadcast delivered when it hears
+  another node relay it (an implicit ACK). With no other relaying node nearby, the sender shows
+  *"failed to deliver to mesh"* even though the T-Deck received the message. This is normal for a
+  mute client, the same as on stock firmware.
 
 ## Changes
 See [SCOOBY_DECK.md](SCOOBY_DECK.md) for the source layout and the per-version change notes.

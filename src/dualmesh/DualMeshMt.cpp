@@ -200,6 +200,14 @@ static void handle(const Lora::Packet& pk) {
         // Our own frame, relayed back by a neighbour: proof the neighbour heard
         // us and that we hear it, but not traffic. Counted, never shown/stored.
         s_diag.self++;
+        // ReliableRouter::shouldFilterReceived: hearing our own packet relayed is
+        // its implicit ACK. Mark our channel message as relayed (UI: [RELAYED]).
+        lock();
+        for (uint16_t i = 0; i < s_count; i++) {
+            Msg& m = s_msgs[(s_head + i) % MAX_MSGS];
+            if (m.outgoing && m.chan != DM_CHAN && m.id == h.id && m.state != 2) { m.state = 2; s_seq++; s_diag.ackRx++; }
+        }
+        unlock();
         Serial.printf("[mt] SELF echo id=%08lx hash=0x%02x rssi=%d (relayed by a neighbour)\n",
                       (unsigned long)h.id, h.channelHash, (int)pk.rssi);
         return;
@@ -273,6 +281,11 @@ static void dmJobs() {
             default: break;
         }
         const bool ok = n && s_radio->queueMeshtastic(f, n);
+        if (ok && (o.job == Lora::Dm::J_ACK || o.job == Lora::Dm::J_NAK)) {
+            s_diag.ackTx++;
+            Serial.printf("[mt] %s -> !%08lx req=%08lx hops=%u\n", o.job == Lora::Dm::J_ACK ? "ACK" : "NAK",
+                          (unsigned long)o.to, (unsigned long)o.id, (unsigned)o.hops);
+        }
         lock();
         Lora::Dm::sent(o, ok, millis());
         unlock();
@@ -284,7 +297,10 @@ static void dmState(uint32_t id, uint32_t /*to*/, Lora::Dm::State st, uint8_t /*
     lock();
     for (uint16_t i = 0; i < s_count; i++) {
         Msg& m = s_msgs[(s_head + i) % MAX_MSGS];
-        if (m.outgoing && m.chan == DM_CHAN && m.id == id) { m.state = (uint8_t)st; s_seq++; }
+        if (m.outgoing && m.chan == DM_CHAN && m.id == id) {
+            if (st == Lora::Dm::ST_DELIVERED && m.state != Lora::Dm::ST_DELIVERED) s_diag.ackRx++;
+            m.state = (uint8_t)st; s_seq++;
+        }
     }
     unlock();
 }

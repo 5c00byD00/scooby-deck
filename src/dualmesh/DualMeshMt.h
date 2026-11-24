@@ -68,6 +68,8 @@ struct RxDiag {
     uint32_t pkiOther;     // PKI to another node / unknown sender key
     uint32_t dupes;        // relayed copies
     uint32_t self;         // our own packets heard back (a neighbour relayed them), dropped
+    uint32_t ackTx;        // ROUTING_APP ACKs/NAKs we sent for want_ack packets to us
+    uint32_t ackRx;        // ACKs received for our own DMs (and implicit ACKs: our channel msgs relayed)
     uint8_t  lastHash;     // channel hash of the last frame
     uint8_t  lastPort;
     uint32_t lastFrom;
