@@ -1,0 +1,124 @@
+name: nightly-v2
+
+# Rolling bleeding-edge build of the v2 branch for the LilyGO T-Deck Plus.
+# Every push to v2 (or a manual run) rebuilds and replaces the assets of the
+# pre-release tagged `nightly-v2`. It is never marked Latest, and it does not
+# touch main, the `nightly` tag or any versioned release.
+#
+# The build is the same one used locally:
+#   pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin
+# The `mergebin` target (merge-bin.py) runs esptool merge_bin with the board's
+# own images: bootloader 0x0, partitions 0x8000 (variants/lilygo_tdeck/
+# partitions_tdeck_touch.csv), boot_app0 0xE000, app 0x10000.
+
+on:
+  push:
+    branches: [v2]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # move the nightly-v2 tag + edit its release (nothing more)
+
+concurrency:
+  group: nightly-v2
+  cancel-in-progress: false  # queue, never overlap; the last push wins
+
+env:
+  PIO_ENV: LilyGo_TDeck_companion_radio_touch
+  TAG: nightly-v2
+  PREFIX: scooby-deck-tdeckplus-nightly-v2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Cache PlatformIO (packages, platforms, lib deps)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+            .pio/libdeps
+          key: pio-${{ runner.os }}-${{ env.PIO_ENV }}-${{ hashFiles('platformio.ini', 'variants/lilygo_tdeck/**/*.ini') }}
+          restore-keys: pio-${{ runner.os }}-${{ env.PIO_ENV }}-
+
+      - name: Install PlatformIO (same version as the local build)
+        run: pip install "platformio==6.2.0"
+
+      - name: Build + merge (no baked Wi-Fi credentials)
+        run: |
+          unset WIFI_SSID WIFI_PWD
+          start=$(date +%s)
+          pio run -e "$PIO_ENV" -t mergebin
+          echo "BUILD_SECS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Collect bins + notes
+        id: meta
+        run: |
+          B=.pio/build/$PIO_ENV
+          mkdir -p upload
+          cp "$B/firmware-merged.bin" "upload/$PREFIX-merged.bin"
+          cp "$B/firmware.bin"        "upload/$PREFIX-app.bin"
+          M_SHA=$(sha256sum "upload/$PREFIX-merged.bin" | cut -d' ' -f1)
+          A_SHA=$(sha256sum "upload/$PREFIX-app.bin"    | cut -d' ' -f1)
+          M_SIZE=$(stat -c %s "upload/$PREFIX-merged.bin")
+          A_SIZE=$(stat -c %s "upload/$PREFIX-app.bin")
+          SUBJ=$(git log -1 --format=%s)
+          DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          VER=$(sed -n 's/.*SCOOBY_DECK_VERSION *"\([^"]*\)".*/\1/p' src/dualmesh/ScoobyVersion.h | head -1)
+          {
+            echo "> [!WARNING]"
+            echo "> **Bleeding edge.** Automatic build of every push to the \`v2\` branch. Untested, may not boot, and may change or reset settings. For daily use, take the Latest release instead."
+            echo
+            echo "**Commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) $SUBJ"
+            echo
+            echo "**Built:** $DATE (version string \`${VER:-unknown}\`, build ${BUILD_SECS}s, [run](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))"
+            echo
+            echo "| File | Flash at | Size | SHA-256 |"
+            echo "|---|---|---|---|"
+            echo "| \`$PREFIX-merged.bin\` | 0x0 (full image: new boards / recovery) | $M_SIZE | \`$M_SHA\` |"
+            echo "| \`$PREFIX-app.bin\` | 0x10000 (app-only update) | $A_SIZE | \`$A_SHA\` |"
+            echo
+            echo "Example: \`esptool.py --chip esp32s3 write_flash 0x0 $PREFIX-merged.bin\` or \`... write_flash 0x10000 $PREFIX-app.bin\`."
+          } > notes.md
+          cat notes.md
+          echo "m_sha=$M_SHA" >> "$GITHUB_OUTPUT"
+          echo "a_sha=$A_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Move the nightly-v2 tag to this commit
+        run: |
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"
+
+      - name: Create or update the nightly-v2 pre-release (never Latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --latest=false \
+              --title "Scooby Deck nightly v2 (rolling)" --notes-file notes.md
+            gh release upload "$TAG" upload/*.bin --clobber
+          else
+            gh release create "$TAG" --verify-tag --prerelease --latest=false \
+              --title "Scooby Deck nightly v2 (rolling)" --notes-file notes.md upload/*.bin
+          fi
+
+      - name: Verify downloads
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          sleep 5
+          for f in merged:${{ steps.meta.outputs.m_sha }} app:${{ steps.meta.outputs.a_sha }}; do
+            kind=${f%%:*}; want=${f#*:}
+            got=$(curl -fsSL "$base/$PREFIX-$kind.bin" | sha256sum | cut -d' ' -f1)
+            echo "$kind: $got"
+            [ "$got" = "$want" ] || { echo "SHA mismatch for $kind"; exit 1; }
+          done

@@ -51,6 +51,10 @@ SquachWatch-CYD (skizzophrenic).
   settings are kept in files on the internal SPIFFS partition (see *Where settings live* below).
 
 ## Flashing
+> **v2 nightly (bleeding edge):** every push to the `v2` branch is built automatically into the
+> [`nightly-v2` pre-release](https://github.com/5c00byD00/scooby-deck/releases/tag/nightly-v2)
+> (`scooby-deck-tdeckplus-nightly-v2-merged.bin` at 0x0, `-app.bin` at 0x10000). Untested; for daily use take the Latest release.
+
 Each release has two files:
 
 | File | Flash at | Use it for |
