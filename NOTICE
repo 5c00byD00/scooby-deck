@@ -1,0 +1,49 @@
+Scooby Deck v3 - our own Meshtastic + MeshCore firmware for the LilyGO T-Deck Plus
+Copyright (C) 2026 Scooby Deck contributors (https://github.com/5c00byD00/scooby-deck)
+
+Scooby Deck v3 as a whole is licensed under the GNU General Public License v3.0
+(see LICENSE). Some files were borrowed or derived from projects under other,
+GPL-compatible licences. Their original licence headers are kept in each file.
+
+CREDITS / THIRD-PARTY CODE
+==========================
+
+1. Faro - LVGL handheld UI for MeshCore (https://github.com/radeksixi/sixi-tdeck-plus)
+   Copyright 2026 Sixi AI (https://sixi.ai)
+   License: Apache-2.0 -> LICENSE.faro-apache-2.0.txt
+   Borrowed verbatim (SPDX headers kept), in app/hal/:
+     FaroDisplay.{h,cpp}     ST7789 320x240 driver, LVGL flush, AW9364 backlight
+     KeyboardBBQ10.{h,cpp}   T-Deck ESP32-C3 keyboard (I2C 0x55) incl. backlight cmd 0x01
+     Trackball.{h,cpp}       Hall-effect trackball (pins 3/15/1/2, click 0)
+     TouchGT911.{h,cpp}      GT911 touch (0x5D/0x14), landscape transform
+     PowerBoard.{h,cpp}      peripheral power (GPIO 10), battery ADC via DMA (GPIO 4)
+   Derived (modified, GPL-3.0-or-later for our changes):
+     app/config/lv_conf.h    trimmed LVGL 9.3 config
+     scripts/link_env.sh     platformio.local.ini attachment to unmodified MeshCore
+     app/ui/UITask.{h,cpp}   the UITask shim pattern and LVGL/indev bring-up
+     app/ui/UITask.cpp sdBegin() follows Faro's SdCard.cpp shared-SPI handling
+   The approach of using upstream MeshCore unmodified as a submodule with
+   platformio.local.ini is Faro's (its ADR-002).
+
+2. MeshCore (https://github.com/meshcore-dev/MeshCore), companion-v1.18.0 (81dbae5)
+   Copyright (c) 2025 Scott Powell / rippleradios.com
+   License: MIT. Used unmodified as the external/MeshCore submodule.
+   app/variant/target.{h,cpp} are derived from its variants/lilygo_tdeck.
+
+3. SquachWatch-CYD (skizzophrenic), GPL-3.0
+   The Meshtastic codec and the dual-mesh time slicing in app/dualmesh/
+   (lora_*.cpp/h, DualMeshRadioWrapper) are ported from it via Scooby Deck v1/v2.
+
+4. WadaMesh (https://github.com/ALLFATHER-BV/wadamesh), GPL-3.0
+   Scooby Deck v1/v2 were built on WadaMesh. v3 contains no WadaMesh UI code;
+   the app/dualmesh/ files were written for Scooby Deck on top of it. No other
+   WadaMesh code was needed: Faro already covers the keyboard backlight and
+   battery reading.
+
+5. Meshtastic protocol (https://meshtastic.org), GPL-3.0. The on-air format is
+   implemented from scratch in app/dualmesh (no Meshtastic firmware code).
+
+6. LVGL 9.3 (MIT), incl. the UNSCII 8/16 fonts by Viznut (public domain);
+   RadioLib (MIT); rweather Crypto (MIT); Adafruit GFX/ST7789 (BSD);
+   arduino-esp32 (LGPL-2.1); see Faro's NOTICE for the full list of the
+   libraries MeshCore pulls in.
