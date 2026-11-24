@@ -43,6 +43,7 @@ static Page s_page = P_NONE, s_pending = P_NONE;
 static bool s_rebuild = false;
 static lv_obj_t* s_body = nullptr;
 static lv_obj_t* s_hdrRight = nullptr;
+static lv_obj_t* s_hdrTitle = nullptr;
 static uint32_t s_sig = 0, s_lastRefresh = 0, s_lastActivity = 0;
 
 struct PageDef { const char* title; void (*build)(lv_obj_t*); Page parent; bool mesh; };
@@ -78,6 +79,12 @@ void back() {
 }
 lv_obj_t* body() { return s_body; }
 lv_obj_t* headerRight() { return s_hdrRight; }
+void setTitle(const char* title) {
+  if (!s_hdrTitle) return;
+  char t[48];
+  snprintf(t, sizeof t, "< %s", title);
+  lv_label_set_text(s_hdrTitle, t);
+}
 void noteActivity() { s_lastActivity = millis(); }
 
 bool typing() {
@@ -244,6 +251,7 @@ lv_obj_t* frame(const char* title, bool backArrow) {
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   s_hdrRight = nullptr;
+  s_hdrTitle = nullptr;
   int top = 0;
   if (title) {
     lv_obj_t* hdr = lv_obj_create(scr);
@@ -257,6 +265,7 @@ lv_obj_t* frame(const char* title, bool backArrow) {
     snprintf(t, sizeof t, "%s%s", backArrow ? "< " : "> ", title);
     lv_obj_t* l = label(hdr, t);
     lv_obj_align(l, LV_ALIGN_LEFT_MID, 2, 0);
+    s_hdrTitle = l;
     if (backArrow) {
       lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_set_ext_click_area(l, 8);
@@ -316,7 +325,8 @@ void popupClose() {
   s_pending = s_page; s_rebuild = true;
 }
 lv_obj_t* popup(const char* title, int h) {
-  if (s_popup) { lv_obj_delete(s_popup); s_popup = nullptr; }
+  // may run inside an event of the old popup's own button: delete it later, not now
+  if (s_popup) { lv_obj_delete_async(s_popup); s_popup = nullptr; }
   s_popupPrevFocus = s_group ? lv_group_get_focused(s_group) : nullptr;
   if (s_group) lv_group_remove_all_objs(s_group);
   s_popup = lv_obj_create(lv_layer_top());

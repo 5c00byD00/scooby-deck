@@ -10,13 +10,6 @@ static void soon(lv_obj_t* b) {
   lv_obj_set_pos(l, 8, 20);
 }
 void buildNamesFirst(lv_obj_t* b) { soon(b); }
-void buildCore(lv_obj_t* b) { soon(b); }      void buildCoreDms(lv_obj_t* b) { soon(b); }
-void buildCoreEdit(lv_obj_t* b) { soon(b); }  void buildCoreChat(lv_obj_t* b) { soon(b); }
-void buildCoreHeard(lv_obj_t* b) { soon(b); }
-void buildTastic(lv_obj_t* b) { soon(b); }    void buildMtDms(lv_obj_t* b) { soon(b); }
-void buildMtEdit(lv_obj_t* b) { soon(b); }    void buildMtChat(lv_obj_t* b) { soon(b); }
-void buildMtHeard(lv_obj_t* b) { soon(b); }
-uint32_t meshSignature(Page) { return 0; }
 void buildSetup(lv_obj_t* b) { soon(b); }     void buildSetName(lv_obj_t* b) { soon(b); }
 void buildSetMt(lv_obj_t* b) { soon(b); }     void buildSetMc(lv_obj_t* b) { soon(b); }
 void buildSetDisplay(lv_obj_t* b) { soon(b); }

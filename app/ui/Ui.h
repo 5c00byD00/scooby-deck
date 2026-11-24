@@ -73,6 +73,7 @@ void        lockHold(uint32_t held_ms);// trackball held this long (0 = released
 lv_obj_t* frame(const char* title, bool backArrow);    // clean screen + header; returns the body
 lv_obj_t* body();                                       // body of the current frame
 lv_obj_t* headerRight();                                // clock / battery label
+void      setTitle(const char* title);                  // replace the header title (keeps the < arrow)
 lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h);
 lv_obj_t* label(lv_obj_t* parent, const char* text, const lv_font_t* f = nullptr, uint32_t color = 0xFFFFFFFF);
 lv_obj_t* button(lv_obj_t* parent, const char* text, int x, int y, int w, int h, lv_event_cb_t cb, void* ud = nullptr);
