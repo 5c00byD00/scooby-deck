@@ -41,6 +41,7 @@ Ctx ctx;
 static lv_group_t* s_group = nullptr;
 static Page s_page = P_NONE, s_pending = P_NONE;
 static bool s_rebuild = false;
+static int s_focusIdx = -1;      // focused object's index in the group (no popup open)
 static lv_obj_t* s_body = nullptr;
 static lv_obj_t* s_hdrRight = nullptr;
 static lv_obj_t* s_hdrTitle = nullptr;
@@ -477,13 +478,29 @@ void tick(uint32_t now) {
     s_rebuild = false;
     const Page p = s_pending;
     if (p != P_NONE && kPages[p].build) {
+      // remember which row had focus so a same-page refresh (cycling a setting) keeps it
+      const bool same = (p == s_page);
+      const int keep = (same && p != P_CORE_CHAT && p != P_MT_CHAT) ? s_focusIdx : -1;
       if (s_popup) { lv_obj_delete(s_popup); s_popup = nullptr; }
       s_page = p;
       lv_obj_t* b = frame(kPages[p].title, p != P_HOME && p != P_BOOT && p != P_NAMES_FIRST);
       kPages[p].build(b);
+      if (keep > 0 && (uint32_t)keep < lv_group_get_obj_count(group())) {
+        lv_obj_t* o = lv_group_get_obj_by_index(group(), keep);
+        if (o && o != lv_group_get_focused(group())) {
+          lv_group_focus_obj(o);
+          lv_obj_scroll_to_view_recursive(o, LV_ANIM_OFF);
+        }
+      }
       s_sig = kPages[p].mesh ? meshSignature(p) : 0;
       updateHeaderRight();
     }
+  }
+  if (!popupOpen() && !locked()) {
+    lv_obj_t* f = lv_group_get_focused(group());
+    s_focusIdx = -1;
+    const uint32_t n = lv_group_get_obj_count(group());
+    for (uint32_t i = 0; f && i < n; i++) if (lv_group_get_obj_by_index(group(), i) == f) { s_focusIdx = (int)i; break; }
   }
   if (now - s_lastRefresh >= 1000) {
     s_lastRefresh = now;
