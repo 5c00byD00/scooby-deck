@@ -54,6 +54,7 @@ SquachWatch-CYD (skizzophrenic).
 > **v2 nightly (bleeding edge):** every push to the `v2` branch is built automatically into the
 > [`nightly-v2` pre-release](https://github.com/5c00byD00/scooby-deck/releases/tag/nightly-v2)
 > (`scooby-deck-tdeckplus-nightly-v2-merged.bin` at 0x0, `-app.bin` at 0x10000). Untested; for daily use take the Latest release.
+> v2 is **2.0.0-dev**: a slim rebuild (HOME dashboard with CORE / SETUP / TASTIC, LongFast by default); see [SCOOBY_DECK.md](SCOOBY_DECK.md#v200-dev-branch-v2-nightly-v2-basic-v2-not-yet-tested-on-hardware) and `docs/screenshots/v2/`.
 
 Each release has two files:
 

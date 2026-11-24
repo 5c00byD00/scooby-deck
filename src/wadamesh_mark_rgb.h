@@ -1,6 +1,16 @@
 // WADAMESH mesh mark, anti-aliased RGB565 (154x98, white-on-black) — generated.
 #pragma once
 #include <stdint.h>
+#if defined(SCOOBY_V2)
+// Scooby Deck v2: no WadaMesh mark before LVGL (the Scooby banner is the boot
+// screen); one black pixel keeps the callers' layout code as it is.
+#define WADAMESH_MARK_W 1
+#define WADAMESH_MARK_H 1
+extern const uint16_t WADAMESH_MARK_RGB565[1];
+#if defined(WADAMESH_MARK_DEFINE)
+const uint16_t WADAMESH_MARK_RGB565[1] = { 0x0000 };
+#endif
+#else
 #define WADAMESH_MARK_W 154
 #define WADAMESH_MARK_H 98
 // ONE copy in the image: the pixels are defined only where WADAMESH_MARK_DEFINE is set
@@ -1270,3 +1280,4 @@ const uint16_t WADAMESH_MARK_RGB565[WADAMESH_MARK_W * WADAMESH_MARK_H] = {
   0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,
 };
 #endif  // WADAMESH_MARK_DEFINE
+#endif  // SCOOBY_V2

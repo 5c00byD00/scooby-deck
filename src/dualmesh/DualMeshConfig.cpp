@@ -43,11 +43,14 @@ void resetDefaults() {
     memset(&s_cfg, 0, sizeof s_cfg);
     s_cfg.version      = CFG_VERSION;
     s_cfg.mode         = MODE_DUAL;          // the user asked for dual mode out of the box
-    s_cfg.mt_preset    = (uint8_t)mtPresetFind("MediumSlow");
+    // v2.0: stock Meshtastic out of the box: LongFast on the default slot
+    // (0 = the hash of the primary channel name, as stock firmware does; US
+    // LongFast lands on slot 20, 906.875 MHz).
+    s_cfg.mt_preset    = (uint8_t)mtPresetFind("LongFast");
     s_cfg.mt_bw        = 250.0f;
-    s_cfg.mt_sf        = 10;
+    s_cfg.mt_sf        = 11;
     s_cfg.mt_cr        = 5;
-    s_cfg.mt_slot      = 48;                 // 902.0 + 0.125 + 47 * 0.25 = 913.875 MHz
+    s_cfg.mt_slot      = 0;
     s_cfg.mt_freq      = 0.0f;
     s_cfg.mt_region_lo = 902.0f;
     s_cfg.mt_region_hi = 928.0f;
@@ -61,6 +64,8 @@ void resetDefaults() {
     s_cfg.tdm_cad_syms = 0;
     s_cfg.long_name[0] = '\0';               // empty = WadaMesh's node name
     s_cfg.short_name[0]= '\0';
+    s_cfg.v2           = 1;
+    s_cfg.mt_sf_ovr    = 0;                  // the preset's SF (LongFast: SF11)
     // Slot 0: the primary. Empty name = the preset's own name, which is what a
     // stock node on that preset hashes its default channel under; key AQ== (the
     // published default key).
@@ -78,21 +83,33 @@ static bool s_fileOk = false;   // the current settings are in the file
 static bool s_noStoreAtLoad = false;   // SPIFFS was not mounted when load() ran
 
 static bool valid(const Config& t) { return t.version == CFG_VERSION; }
+// v1.x blobs end at mt_priv_set; v2 appended fields after it.
+static const size_t CFG_V1_SIZE = offsetof(Config, mt_priv_set) + 1;
+static bool getCfg(Config& tmp) {
+    memset(&tmp, 0, sizeof tmp);
+    const long n = Store::get("cfg", &tmp, sizeof tmp);
+    // A shorter (v1) blob: its trailing padding byte must not read as a v2 field.
+    if (n >= (long)CFG_V1_SIZE && n < (long)sizeof tmp)
+        memset((uint8_t*)&tmp + CFG_V1_SIZE, 0, sizeof tmp - CFG_V1_SIZE);
+    return n >= (long)CFG_V1_SIZE && n <= (long)sizeof tmp && valid(tmp);
+}
 
 void load() {
     resetDefaults();
     Config tmp;
     const char* from = "defaults";
     s_noStoreAtLoad = !Store::ready();
-    if (Store::get("cfg", &tmp, sizeof tmp) == (long)sizeof tmp && valid(tmp)) {
+    if (getCfg(tmp)) {
         s_cfg = tmp; s_fileOk = true; from = "SPIFFS /dm_cfg.bin";
     }
 #if defined(ESP32)
     else {
         Preferences p;
         if (p.begin("dualmesh", true)) {
+            memset(&tmp, 0, sizeof tmp);
             const size_t n = p.getBytes("cfg", &tmp, sizeof tmp);
-            if (n == sizeof tmp && valid(tmp)) { s_cfg = tmp; from = "NVS (migrating to SPIFFS)"; }
+            if (n >= CFG_V1_SIZE && n < sizeof tmp) memset((uint8_t*)&tmp + CFG_V1_SIZE, 0, sizeof tmp - CFG_V1_SIZE);
+            if (n >= CFG_V1_SIZE && valid(tmp)) { s_cfg = tmp; from = "NVS (migrating to SPIFFS)"; }
             p.end();
         }
         if (strcmp(from, "defaults") != 0) s_fileOk = Store::put("cfg", &s_cfg, sizeof s_cfg);
@@ -102,7 +119,20 @@ void load() {
     s_cfg.long_name[sizeof s_cfg.long_name - 1] = 0;
     s_cfg.short_name[sizeof s_cfg.short_name - 1] = 0;
     if (s_cfg.mode > MODE_MESHTASTIC) s_cfg.mode = MODE_DUAL;
-    if (s_cfg.shared_sf != 0 && s_cfg.shared_sf != 5 && s_cfg.shared_sf != 7 && s_cfg.shared_sf != 9) s_cfg.shared_sf = 0;
+    // v2.0: one SF setting per protocol (Meshtastic: mt_sf_ovr here; MeshCore:
+    // its own radio settings), so the v1 shared SF is retired.
+    s_cfg.shared_sf = 0;
+    if (s_cfg.mt_sf_ovr && (s_cfg.mt_sf_ovr < 5 || s_cfg.mt_sf_ovr > 12)) s_cfg.mt_sf_ovr = 0;
+    if (!s_cfg.v2) {
+        // First boot on v2 with v1 settings: move the Meshtastic radio to the v2
+        // defaults (LongFast, default slot, preset SF); names, channels, PKI key
+        // and the mesh mode are kept.
+        s_cfg.mt_preset = (uint8_t)mtPresetFind("LongFast");
+        s_cfg.mt_slot = 0; s_cfg.mt_freq = 0.0f; s_cfg.mt_sf_ovr = 0;
+        s_cfg.v2 = 1;
+        Serial.println("[dm-cfg] v1 settings: Meshtastic radio moved to the v2 default (LongFast)");
+        s_fileOk = Store::put("cfg", &s_cfg, sizeof s_cfg);
+    }
     applyChannels();
 }
 
@@ -128,7 +158,7 @@ void storeRetry() {
         // Never overwrite a good file we simply could not read at boot.
         Config tmp;
         s_noStoreAtLoad = false;
-        if (Store::get("cfg", &tmp, sizeof tmp) == (long)sizeof tmp && valid(tmp)) {
+        if (getCfg(tmp)) {
             Serial.println("[dm-cfg] SPIFFS mounted late: kept /dm_cfg.bin (restart to use it)");
             s_fileOk = true;
             return;
@@ -148,7 +178,7 @@ const char* mtPrimaryName() {
 uint8_t mtPrimaryHash() { return Meshtastic::channel(0).hash; }
 float mtBw() { return s_cfg.mt_preset < mtPresetCount() ? PRESETS[s_cfg.mt_preset].bw : s_cfg.mt_bw; }
 uint8_t mtSf() {
-    if (s_cfg.shared_sf) return s_cfg.shared_sf;
+    if (s_cfg.mt_sf_ovr >= 5 && s_cfg.mt_sf_ovr <= 12) return s_cfg.mt_sf_ovr;
     return s_cfg.mt_preset < mtPresetCount() ? PRESETS[s_cfg.mt_preset].sf : s_cfg.mt_sf;
 }
 uint8_t mtCr() { return s_cfg.mt_preset < mtPresetCount() ? PRESETS[s_cfg.mt_preset].cr : s_cfg.mt_cr; }

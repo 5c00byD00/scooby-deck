@@ -472,6 +472,20 @@ public:
     }
     return false;
   }
+#if defined(SCOOBY_V2)
+  // Scooby Deck v2 CORE page: read-only views of the MeshCore chat ring + threads.
+  const UIThread* sdThread(int idx) const {
+    return (_ui_threads && idx >= 0 && idx < MAX_UI_THREADS && _ui_threads[idx].used) ? &_ui_threads[idx] : nullptr;
+  }
+  int sdFindThread(const char* name, bool channel) const { return _ui_threads ? findThreadByName(name, channel) : -1; }
+  int sdMsgCount() const { return _ui_msgs ? _ui_msg_count : 0; }
+  // i = 0 is the oldest message in the ring, sdMsgCount()-1 the newest.
+  const UIMessage* sdMsgAt(int i) const {
+    if (!_ui_msgs || i < 0 || i >= _ui_msg_count || _ui_msg_cap <= 0) return nullptr;
+    return &_ui_msgs[(_ui_msg_head - _ui_msg_count + i + 2 * _ui_msg_cap) % _ui_msg_cap];
+  }
+  uint32_t sdMsgSeq() const { return _ui_seq_next; }   // moves on every appended message
+#endif
   int  threadScroll() const { return _thread_scroll; }
   void setThreadScroll(int v) { _thread_scroll = v; }
   bool hasDisplay() const { return _display != NULL; }

@@ -67,6 +67,22 @@ void shortName(char out[5]) {
     Lora::MyName::shortName(cfg().short_name, longName(), out, 5);
 }
 void identityChanged() { s_announced = false; }
+const uint8_t* publicKey()  { return Lora::Dm::publicKey(); }
+const uint8_t* privateKey() { return Lora::Dm::privateKey(); }
+bool setPrivateKey(const uint8_t* priv32) {
+    static const uint8_t zero[32] = {0};
+    if (priv32 && !memcmp(priv32, zero, 32)) return false;
+    Config& c = cfg();
+    if (s_lock) xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+    // begin() with no saved key draws a fresh random one; with a key, derives its public half.
+    Lora::Dm::begin(s_me, priv32, rnd);
+    memcpy(c.mt_priv, Lora::Dm::privateKey(), 32);
+    c.mt_priv_set = 1;
+    if (s_lock) xSemaphoreGiveRecursive(s_lock);
+    save();
+    s_announced = false;   // NodeInfo with the new public key on the next send
+    return true;
+}
 
 static void storeMsg(uint32_t from, uint32_t peer, uint32_t id, uint8_t chan, bool out, uint8_t state,
                      const char* text, int16_t rssi, int8_t snr4) {

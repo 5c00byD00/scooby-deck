@@ -147,7 +147,11 @@
   #define CAP_LARGE_SCREEN 0   // 320x240
   #define CAP_SD           1   // microSD on the shared SPI bus
   #define CAP_FILESYSTEM   1   // browsable filesystem (the SD card)
+#if defined(SCOOBY_V2)
+  #define CAP_GPS          0   // Scooby Deck v2: no location for now
+#else
   #define CAP_GPS          1
+#endif
   #define CAP_OTA          1   // native dual-OTA slot
   #define CAP_LOCK_SCREEN  1
 
@@ -342,7 +346,9 @@
   #define CAP_TWO_ROW_BAR_PORTRAIT 0
 #endif
 
-#if CAP_SD && defined(BOARD_HAS_PSRAM) && \
+#if defined(SCOOBY_V2)
+  #define CAP_EMOJI_PACK 0   // Scooby Deck v2: unscii terminal text only
+#elif CAP_SD && defined(BOARD_HAS_PSRAM) && \
     (defined(HAS_CROWPANEL_35) || defined(HAS_TDECK_PRO) || defined(HAS_TDECK_GT911) || \
      defined(HAS_THINKNODE_M9) || defined(HELTEC_LORA_V4_R8))
   #define CAP_EMOJI_PACK 1
@@ -386,7 +392,7 @@
 // drive the focus group with its arrows, Enter and Esc. The P4 boards are out:
 // the T-Display P4's C6 firmware has no Bluetooth, and the Tanmatsu runs another
 // NimBLE wrapper.
-#if defined(BLE_PIN_CODE) && defined(MULTI_TRANSPORT_COMPANION) && \
+#if defined(BLE_PIN_CODE) && defined(MULTI_TRANSPORT_COMPANION) && !defined(SCOOBY_V2) && \
     !defined(HAS_TANMATSU) && !defined(HAS_TDISPLAY_P4) && !defined(HAS_CROWPANEL_P4_101)
   #define CAP_BLE_KEYBOARD 1
 #else
@@ -504,7 +510,7 @@
 // The Constellation screensaver (Constellation.cpp) animates continuously. E-paper
 // cannot show that, and refreshing it to try would wear the panel, so the T-Deck
 // Pro and Max (both HAS_TDECK_PRO) go without. Every other display gets it.
-#if CAP_EPAPER
+#if CAP_EPAPER || defined(SCOOBY_V2)   // Scooby Deck v2: no screensaver (lock screen instead)
   #define CAP_SCREENSAVER 0
 #else
   #define CAP_SCREENSAVER 1

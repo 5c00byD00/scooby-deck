@@ -96,6 +96,10 @@ RxDiag   rxDiag();
 
 // Identity changed: the next text announces it again.
 void     identityChanged();
+// v2.0: the Meshtastic PKI key (DM encryption). privateKey is for SD backup only.
+const uint8_t* publicKey();
+const uint8_t* privateKey();
+bool     setPrivateKey(const uint8_t* priv32);   // nullptr = make a new random key; saves + re-announces
 }
 
 // Implemented in UITask.cpp: WadaMesh's node name, used when no long name is set.

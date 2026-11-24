@@ -9463,6 +9463,12 @@ static void scoobyOpenDashboard();
 static void scoobyOpenMtChats();
 static void scoobyBootDashboard();
 static void applyTerminalTheme();
+static bool scoobySetupOpen();                // ScoobyDeckUi.inc: first-boot name setup is up
+static bool scoobySetupTypeKey(uint32_t key); // types a stray key into its LONG field
+#if defined(SCOOBY_V2)
+static bool scoobyV2HotKey(int key);          // C / T / P / B hotkeys (v2 pages)
+static void scoobyLockBuild(lv_obj_t* root);  // v2 lock screen: the boot banner
+#endif
 #endif
 struct SettingsCatDef { const char* label; const char* icon; };
 #if CAP_LUA_APPS
@@ -38899,10 +38905,15 @@ static bool reportPostWorker(WiFiClient& client, HTTPClient& http,
                              const char* path, const char* body) {
   char url[64];
   snprintf(url, sizeof url, "http://firmware.wadamesh.com/report/%s", path);
+#if CAP_LUA_APPS
   char reply[96];
   return luaStoreHttpReq(client, http, url, reply, sizeof reply,
                          reinterpret_cast<const uint8_t*>(body), strlen(body),
                          "application/json") >= 0;
+#else
+  (void)client; (void)http; (void)url; (void)body;
+  return false;   // Scooby Deck v2: no Lua store HTTP helper, no reports
+#endif
 }
 
 #if defined(ESP32) && defined(MULTI_TRANSPORT_COMPANION) && CAP_OTA
@@ -46345,8 +46356,11 @@ static void settingsCatValue(int c, char* out, size_t cap) {
 #endif
     case CAT_LANGUAGE: {
       const uint8_t l = i18nGetLang();
+#if CAP_LUA_APPS
       if (s_langfile_name[0])  snprintf(out, cap, "%s", s_langfile_name);   // a language file is active
-      else if (l < LANG_COUNT) snprintf(out, cap, "%s", kUiLangNames[l]);
+      else
+#endif
+      if (l < LANG_COUNT) snprintf(out, cap, "%s", kUiLangNames[l]);
       break;
     }
 #if CAP_BATTERY
@@ -53532,7 +53546,11 @@ struct LockInk {
 static LockInk s_lock_ink = { 0xE6EBED, 0xE6EBED, 0x8A969C, 0x5C686E, 0x19D6C2, 0x15B6A6, 0x15B6A6, 0x0B0E10, 0x1C2428, false };
 
 // How long the trackball must be held to unlock, in ms.
+#if defined(SCOOBY_V2)
+static const unsigned long kLockUnlockHoldMs = 3000;   // Scooby Deck v2: hold the trackball 3 s
+#else
 static const unsigned long kLockUnlockHoldMs = 1000;
+#endif
 // "Unlocking…" countdown popup (mirrors the spacebar lock countdown) shown
 // while the trackball is held on the lock screen.
 static lv_obj_t* s_unlock_popup = nullptr;
@@ -54117,7 +54135,11 @@ static void lockscreenUnlockProgress(unsigned long remaining_ms) {
     lv_obj_clear_flag(s_unlock_popup, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* t = lv_label_create(s_unlock_popup);
+#if defined(SCOOBY_V2)
+    lv_label_set_text(t, "> UNLOCKING");
+#else
     lv_label_set_text(t, TR("Unlocking\xE2\x80\xA6"));
+#endif
     lv_obj_set_style_text_color(t, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(t, &g_font_16, LV_PART_MAIN);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
@@ -54195,6 +54217,20 @@ static void lockscreenShow() {
     lv_obj_set_style_border_opa(g_statusbar.root, LV_OPA_TRANSP, LV_PART_MAIN);
   }
   if (s_lock_root) { lv_obj_move_foreground(s_lock_root); return; }
+#if defined(SCOOBY_V2)
+  {
+    // Scooby Deck v2: the boot screen (banner + credits) is the lock screen.
+    s_lock_root = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_lock_root);
+    lv_obj_set_size(s_lock_root, lv_disp_get_hor_res(nullptr), lv_disp_get_ver_res(nullptr));
+    lv_obj_set_pos(s_lock_root, 0, 0);
+    lv_obj_clear_flag(s_lock_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lock_root, LV_OBJ_FLAG_CLICKABLE);   // swallow touches
+    scoobyLockBuild(s_lock_root);
+    lv_obj_move_foreground(s_lock_root);
+    return;
+  }
+#endif
   const lv_coord_t sw = lv_disp_get_hor_res(nullptr);
   const lv_coord_t sh = lv_disp_get_ver_res(nullptr);
   char wpath[TOUCH_LOCK_WALLPAPER_MAXLEN];
@@ -57201,6 +57237,11 @@ if (g_lv.task && g_lv.task->isManualLock()) {
   if (m9AccentBoxHandleKey(key)) return;
   if (m9HandleArrowKey(key, ta)) return;    // ← runs BEFORE the if(!ta) split
 #endif
+#if defined(SCOOBY_DECK)
+  // First-boot name setup is up but no field is bound: letters go into its
+  // LONG field instead of firing hotkeys (space = lock, page letters).
+  if (!ta && scoobySetupOpen() && scoobySetupTypeKey(key)) { if (g_lv.task) g_lv.task->noteUserInput(); return; }
+#endif
   if (!ta) {
 #if defined(TLORA_PAGER)
     // No field is bound to the on-screen keyboard, so nav focus is on a plain
@@ -57348,12 +57389,25 @@ if (g_lv.task && g_lv.task->isManualLock()) {
     // trackball CLICK unlocks it. The T-Deck's only side button is a hardware
     // reset (unremappable), so the spacebar is the keyboard lock key. NB this
     // overrides the old "space = Home tab" shortcut — use 'h' for Home.
-    if (!s_setup_root && key == ' ') {
+    if (!s_setup_root && key == ' '
+#if defined(SCOOBY_DECK)
+        && !scoobySetupOpen()
+#endif
+        ) {
       startLockingCountdown();   // 1 s "Locking…" countdown; tap / any other key cancels
       return;
     }
 #endif
-#if defined(SCOOBY_DECK) && (CAP_TRACKBALL || defined(HAS_TDECK_PRO))
+#if defined(SCOOBY_V2) && (CAP_TRACKBALL || defined(HAS_TDECK_PRO))
+    // Scooby Deck v2: C = CORE, T/M = TASTIC, P = SETUP, B/H = HOME, unless the key
+    // is bound to navigation in the keyboard settings. WadaMesh's tab hotkeys are
+    // swallowed: its tabs sit hidden under HOME.
+    if (!s_setup_root && !navFocusedTextarea()) {
+      const int lk = (key >= 'A' && key <= 'Z') ? key + 32 : key;
+      if (navKeyUsedBy(lk, -1) < 0 && scoobyV2HotKey(lk)) { if (g_lv.task) g_lv.task->noteUserInput(); return; }
+      if (navTabForHotkey(key) >= 0 || tabForKey(key) >= 0) { if (g_lv.task) g_lv.task->noteUserInput(); return; }
+    }
+#elif defined(SCOOBY_DECK) && (CAP_TRACKBALL || defined(HAS_TDECK_PRO))
     // Scooby Deck hotkeys, with no text field being edited and the key not bound
     // to navigation in Settings > Keyboard: B = the dashboard (toggles), M = the
     // Meshtastic chats. Work from anywhere: an open settings page or app page is
@@ -60359,6 +60413,17 @@ static void openControlCenter() {
   // (Power is the round icon in the card's top-right corner, not a grid chip.)
 }
 
+#if !CAP_LUA_APPS
+// Scooby Deck v2 (no Lua apps): the reboot-with-notice helper lives in the Lua
+// block below, so give the settings that reboot their own copy.
+static void svRebootTimerCb(lv_timer_t*) { if (g_lv.task) g_lv.task->rebootDevice(); }
+static void rebootWithNotice(const char* msg) {
+  if (g_lv.task) g_lv.task->showAlert(msg, 2400);
+  lv_timer_t* t = lv_timer_create(svRebootTimerCb, 1800, nullptr);
+  if (t) lv_timer_set_repeat_count(t, 1);
+  else if (g_lv.task) g_lv.task->rebootDevice();
+}
+#endif
 #if CAP_LUA_APPS
 // ===== Lua app store: installed scan + Store page (LUA_APPS.md Phase 2) =====
 
@@ -71080,6 +71145,11 @@ static void sdFallbackNotice() {
       TR("Try the card again"), sdFallbackRetryCb);
 }
 static void setupWizardMaybeOpen() {
+#if defined(SCOOBY_V2)
+  // v2: WadaMesh's welcome wizard is gone; Scooby Deck asks for the names itself.
+  if (!touchPrefsGetSetupDone()) touchPrefsSetSetupDone(true);
+  return;
+#endif
 #if defined(ESP32)
   if (g_sd_fallback_boot) return;   // not a new device: sdFallbackNotice() runs once Home is built
 #endif

@@ -55,6 +55,9 @@ struct Config {
     // PKI identity (Meshtastic DMs)
     uint8_t  mt_priv[32];
     uint8_t  mt_priv_set;
+    // ---- v2.0 (appended; an older, shorter blob still loads) ----
+    uint8_t  v2;              // 1 once the v2 radio defaults were applied (LongFast, auto slot)
+    uint8_t  mt_sf_ovr;       // Meshtastic SF override: 0 = the preset's own SF, else 5-12
 };
 
 Config&  cfg();
@@ -66,7 +69,7 @@ void     storeRetry();               // write to SPIFFS if an earlier save could
 // Derived
 float    mtFreqMHz();             // the Meshtastic centre frequency the radio uses
 float    mtBw();
-uint8_t  mtSf();                  // with shared SF applied
+uint8_t  mtSf();                  // with the SF override (v2) applied
 uint8_t  mtCr();
 const char* mtPresetName();       // "MediumSlow" or "Custom"
 const char* mtPrimaryName();

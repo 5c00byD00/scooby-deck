@@ -24,6 +24,44 @@ Build: `pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin`
 - MeshCore — Scott Powell / ripplebiz, MIT
 - Meshtastic — Meshtastic LLC and contributors, GPL-3.0 (protocol)
 
+
+## v2.0.0-dev (branch `v2`, nightly-v2), basic v2, not yet tested on hardware
+
+A slimmed-down rebuild of the UI. Everything WadaMesh-specific that is not needed
+for two-mesh texting is switched off; the MeshCore and Meshtastic stacks are untouched.
+Mockups (example data, not device screenshots): `docs/screenshots/v2/`.
+
+- **HOME** is the status dashboard (the full readout), always under everything, with three
+  boxes: `[ CORE ]` (MeshCore), `[ SETUP ]`, `[ TASTIC ]` (Meshtastic). Hotkeys with no text
+  field being edited: `C` CORE, `T`/`M` TASTIC, `P` SETUP, `B`/`H` back to HOME.
+- **CORE / TASTIC**: last heard (3 newest; tap for the list; tap a node for details, hold to
+  delete), channels with new/stored message counts, `[ DMs ]`, `[ EDIT ]` (add / remove /
+  hold to edit; slot 0 cannot be removed), channel and DM chats with send. CORE reads the
+  MeshCore contacts and channels and the on-device MeshCore chat history; a CORE channel can
+  be `Public`, a `#hashtag` (key made from the name) or a name + 32-hex key.
+- **SETUP**: 1 Listening to (tap: Meshtastic > Meshcore > Both), 2 Device name (long name =
+  MeshCore + Meshtastic, short name = Meshtastic only), 3 Meshtastic (preset, SF override,
+  frequency slot, hop limit, TX power, role CLIENT_MUTE, PKI key back up / restore to
+  `/scooby_mt_key.txt` on the SD card, new key), 4 Meshcore (North American presets + custom
+  frequency / BW / SF / CR, TX power), 5 Display (brightness, screen sleep, keyboard light
+  off / on / auto and level, lock screen on / off).
+- **Meshtastic default is now LongFast** on the stock default slot (US: 906.875 MHz), with the
+  preset's own SF (SF11) and hop limit 3. A device coming from v1.x is moved to these radio
+  defaults once (names, channels, PKI key and the mode are kept). The v1 "shared SF" is
+  retired: each protocol has its own SF (Meshtastic: SETUP > Meshtastic; MeshCore: SETUP > Meshcore).
+- **Lock screen** (SETUP > Display > LOCK SCREEN ON): when the screen sleeps it locks; waking
+  shows the boot screen (banner + credits) until the trackball is held for 3 s. Space (not
+  typing) sleeps and locks at once after a 1 s countdown (any other key cancels).
+- The first-boot name setup from v1.2.1 is included (shown once before HOME on a new device).
+- Settings live on SPIFFS with a CRC (`/dm_cfg.bin`, `/dm_v2ui.bin`), so a reflash keeps them.
+- Removed from this build: Lua apps and the app store, the web browser and web console,
+  USB file / flash modes, screen mirror, radio tools, language packs, firmware update check,
+  console, map pulses and map tiles, GPS / location, the Wi-Fi and Bluetooth setup pages,
+  the BLE keyboard, the screensaver, emoji and extra-script fonts, the large Montserrat sizes
+  (aliased to 16), the WadaMesh boot mark and WadaMesh's own welcome wizard and settings.
+  The BLE / Wi-Fi companion link to the phone apps stays (removing it needs more work).
+- App image: 2,850,445 bytes (70.2% of the 4 MB app slot), down from 3,851,405 (94.8%).
+
 ## v0.1.1 (2026-11-23)
 
 Meshtastic RX and navigation fixes. Found by code review against SquachWatch-CYD
