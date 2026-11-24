@@ -4,17 +4,19 @@ WadaMesh fork that speaks **MeshCore and Meshtastic on one SX1262** by time-slic
 the radio (dual-mesh scheduler ported from SquachWatch-CYD's T-Deck BOTH mode).
 
 Build: `pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin`
-→ `.pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin` (flash at 0x0).
+→ `.pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin` (flash at 0x0), and
+`firmware.bin` (app only, flash at 0x10000).
 
 ## What's added (all behind `-D SCOOBY_DECK`)
 - `src/dualmesh/DualMeshRadioWrapper.*` — WRAPPER_CLASS for MeshCore. A core-0 task owns
   the chip: MeshCore home RX + Meshtastic CAD peeks (Dual), or one profile only.
-- `src/dualmesh/DualMeshConfig.*` — NVS "dualmesh": mode, Meshtastic preset/slot/freq/BW/SF/CR/
+- `src/dualmesh/DualMeshStore.*` — atomic CRC-checked blob files on SPIFFS (`/dm_*.bin`), v1.2.0.
+- `src/dualmesh/DualMeshConfig.*` — SPIFFS `/dm_cfg.bin` (NVS "dualmesh" before v1.2.0): mode, Meshtastic preset/slot/freq/BW/SF/CR/
   sync/preamble/hops/power, shared SF (off/5/7/9), TDM, names, 8 channels, PKI key.
 - `src/dualmesh/DualMeshMt.*` + `lora_*` — Meshtastic client (client-mute): decode, AES-128/256
   channels, PKI DMs (X25519 + AES-CCM), NodeInfo, node list, message store.
 - `src/ui-touch/ScoobyDeckUi.inc` — Settings > Scooby Deck, Dashboard (boot home),
-  Meshtastic chats, terminal palette. `scripts/build/patch_lvgl_scooby_flat.py` — square/flat drawing.
+  Meshtastic page (home / last heard / node popup / DMs / edit channels / chats), terminal palette. `scripts/build/patch_lvgl_scooby_flat.py` — square/flat drawing.
 
 ## Credits / licence (GPL-3.0-or-later)
 - WadaMesh — ALLFATHER-BV, GPL-3.0 (base firmware and UI)
@@ -104,3 +106,48 @@ That matches stock firmware for a mute client; it isn't a fault.
   (ACKs for our DMs, plus implicit ACKs: our channel messages heard relayed).
 - Chats: our channel messages show `[RELAYED]` when a neighbour's rebroadcast was
   heard (Meshtastic's implicit ACK); DMs keep `[ACK]` / `[FAIL]`.
+
+## v1.2.0-beta (2026-11-24), beta, built locally, not yet tested on hardware
+
+### Settings survive reflashing
+The merged image covers 0x0-0x3BC630 and fills 0x9000-0xE000 (NVS) with 0xFF, so every
+0x0 flash wiped NVS namespace `dualmesh`: the Meshtastic PKI private key (`mt_priv`), names,
+channels, mode and radio. The node number comes from the MAC, so it stayed, but peers saw a
+new public key and DMs broke until they relearned it.
+
+- New `DualMeshStore`: one file per blob on the SPIFFS partition (0xC90000-0xFF0000, which no
+  flash image touches). Format `SDM1 | len | crc32 | payload`. Write `.tmp`, read it back and
+  check the CRC, remove the old file, rename. A load with no valid `.bin` uses a valid `.tmp`.
+  SPIFFS is mounted with the same call as `main.cpp` (`SPIFFS.begin(false)`, never formats);
+  whichever runs first wins.
+- `/dm_cfg.bin`: the whole `Config` (mode, preset/BW/SF/CR, slot/freq, sync, preamble, hops,
+  power, announce, shared SF, TDM, long/short name, 8 channels, `mt_priv`).
+- `/dm_names.bin`, `/dm_keys.bin`: learned Meshtastic names and peer public keys (was NVS
+  `names` / `keys`, up to 8 KB each).
+- `/dm_term.bin`: the terminal theme switch.
+- Load order: file, else the old NVS blob (then written to the file once), else defaults (the
+  PKI key is then generated and saved). NVS is written only if SPIFFS refuses a save, and the
+  file is retried every 60 s. A file that exists but could not be read at boot is never
+  overwritten.
+- WadaMesh / MeshCore were already safe: identity, `/new_prefs`, contacts, channels, history
+  and the touch settings (`SdNvsPrefs` → `/prefs/*.kv`) all live on SPIFFS. NVS only holds
+  copies and counters (`mc_id` spare identity copy, `mcboot` boot counters, `touch` boot-logo
+  rotation and the "store on SD" mirror), which are rebuilt from SPIFFS at boot.
+
+### Meshtastic page overhaul (mockups: 320x240, unscii-8)
+- Home: one-row status bar (`appPageBeginSlim`), a scrolling column with a scroll bar:
+  LAST HEARD box (3 newest nodes; tap opens the list) and CHANNELS (tap opens the chat;
+  `(n)` new messages black-on-green, else the stored count dim). [ DMs ] / [ EDIT ] pinned.
+- Last Heard: all nodes, `name !id age snr Hn`. Tap: node popup (long/short name, ID, HW,
+  role, heard, SNR, RSSI, hops, position, battery, PKI) with [ DM ] / [ CLOSE ]. Hold: confirm
+  and remove from the list (it returns when heard again).
+- DMs: conversations newest first, with age, unread `(n)` and the last message. Tap opens,
+  hold confirms and deletes the conversation.
+- Edit: slots 0-7. Tap selects, hold edits name + PSK. [ ADD ] fills the selected empty slot
+  or the first free one; [ REMOVE ] removes the selected slot after a confirm; slot 0 can't
+  be removed.
+- Back (bar chevron / M): popup → list → home → close. DMs opened from Last Heard go back
+  there. Lists refresh at most every 2 s, keep their scroll position, and never rebuild under a
+  finger or an open popup. Popups sit on the top layer so trackball focus stays inside them.
+- Node table now keeps HW model + role (NodeInfo), position (Position) and battery (device
+  Telemetry). Messages carry an unread flag, so DMs count per conversation.

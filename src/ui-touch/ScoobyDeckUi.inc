@@ -10,6 +10,7 @@
 #if defined(SCOOBY_DECK)
 #include "../dualmesh/DualMeshConfig.h"
 #include "../dualmesh/DualMeshMt.h"
+#include "../dualmesh/DualMeshStore.h"
 #include "../dualmesh/ScoobyVersion.h"
 #include <esp_freertos_hooks.h>
 #include <Preferences.h>
@@ -20,18 +21,23 @@ extern "C" volatile uint8_t lv_scooby_flat;   // patched into lv_draw_rect.c (sc
 static constexpr uint32_t TERM_GREEN = 0x00FF41, TERM_MID = 0x00B32D, TERM_DIM = 0x00802A,
                           TERM_DARK = 0x003311, TERM_AMBER = 0xFFB000, TERM_RED = 0xFF4040;
 static int8_t s_sd_term = -1;
+// The theme switch: /dm_term.bin on SPIFFS since v1.2.0 (NVS is wiped by a 0x0 flash).
 static bool scoobyTermOn() {
   if (s_sd_term < 0) {
-    Preferences p;
-    s_sd_term = 1;
-    if (p.begin("dualmesh", true)) { s_sd_term = p.getUChar("term", 1) ? 1 : 0; p.end(); }
+    uint8_t v = 1;
+    if (DualMesh::Store::get("term", &v, 1) != 1) {
+      Preferences p;   // older builds: read once, then keep it in the file
+      if (p.begin("dualmesh", true)) { v = p.getUChar("term", 1); p.end(); }
+      DualMesh::Store::put("term", &v, 1);
+    }
+    s_sd_term = v ? 1 : 0;
   }
   return s_sd_term == 1;
 }
 static void scoobySetTerm(bool on) {
   s_sd_term = on ? 1 : 0;
-  Preferences p;
-  if (p.begin("dualmesh", false)) { p.putUChar("term", on ? 1 : 0); p.end(); }
+  const uint8_t v = on ? 1 : 0;
+  DualMesh::Store::put("term", &v, 1);
 }
 static void applyTerminalTheme() {
   if (!scoobyTermOn()) { lv_scooby_flat = 0; return; }
@@ -104,6 +110,8 @@ static void sdStyleTermLabel(lv_obj_t* l, const lv_font_t* f, uint32_t color) {
 }
 static uint32_t sdInk()  { return scoobyTermOn() ? TERM_GREEN : COLOR_TEXT; }
 static uint32_t sdDim()  { return scoobyTermOn() ? TERM_MID : COLOR_SUB; }
+static bool sdOk(lv_obj_t* o) { return o && lv_obj_is_valid(o); }
+static const char* sdTxt(lv_obj_t* ta) { return sdOk(ta) ? lv_textarea_get_text(ta) : ""; }
 
 // A flat, square "[ LABEL ]" button.
 static lv_obj_t* sdButton(lv_obj_t* parent, const char* text, lv_event_cb_t cb, void* ud, lv_coord_t w, lv_coord_t h) {
@@ -297,61 +305,38 @@ static void scoobyBootDashboard() {
 }
 
 // ============================================================================
-// Meshtastic chats
+// Meshtastic pages (v1.2.0): home (last heard + channels), last heard, node
+// details, DMs, edit channels, and the channel / DM chats.
+// One root (s_mt_root) rebuilt per view; popups are an overlay on that root.
+// The status bar stays one row (appPageBeginSlim) so 3 nodes + 3 channels fit.
 // ============================================================================
-enum { MTV_LIST = 0, MTV_CHAN, MTV_DMLIST, MTV_DM, MTV_NODES };
+enum { MTV_HOME = 0, MTV_CHAN, MTV_DMLIST, MTV_DM, MTV_HEARD, MTV_EDIT };
 static lv_obj_t*   s_mt_root = nullptr;
 static lv_obj_t*   s_mt_msgs = nullptr;
 static lv_obj_t*   s_mt_ta = nullptr;
+static lv_obj_t*   s_mt_scroll = nullptr;    // the view's scrolling container (kept across refreshes)
+static lv_obj_t*   s_mt_pop = nullptr;       // an open popup (overlay)
+static lv_obj_t*   s_mt_pop_name = nullptr;  // channel entry popup fields
+static lv_obj_t*   s_mt_pop_key = nullptr;
 static lv_timer_t* s_mt_timer = nullptr;
-static uint8_t     s_mt_view = MTV_LIST;
+static uint8_t     s_mt_view = MTV_HOME;
 static uint8_t     s_mt_chan = 0;
 static uint32_t    s_mt_peer = 0;
+static uint8_t     s_mt_dm_back = MTV_DMLIST;   // where Back goes from a DM
+static int8_t      s_mt_sel = -1;               // Edit: selected slot
+static int8_t      s_mt_edit_slot = -1;         // Edit: slot the entry popup writes
+static uint32_t    s_mt_pop_num = 0;            // node / DM peer the popup is about
 static uint32_t    s_mt_seq = 0;
+static uint32_t    s_mt_built_ms = 0;
 static char        s_mt_title[40];
 static void closeMtChats();
 static void mtShow(uint8_t view);
 
-static lv_coord_t mtTop() { return statusBarCurH() - STATUSBAR_H + 4; }
-
-static lv_obj_t* mtListContainer() {
-  const lv_coord_t top = mtTop();
-  lv_obj_t* c = lv_obj_create(s_mt_root);
-  lv_obj_remove_style_all(c);
-  lv_obj_set_size(c, lv_disp_get_hor_res(nullptr), appPageContentH() - top);
-  lv_obj_set_pos(c, 0, top);
-  lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(c, 4, LV_PART_MAIN);
-  lv_obj_set_style_pad_row(c, 4, LV_PART_MAIN);
-  lv_obj_add_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-  return c;
-}
-static lv_obj_t* mtRowBtn(lv_obj_t* parent, const char* text, lv_event_cb_t cb, void* ud) {
-  lv_obj_t* b = sdButton(parent, "", cb, ud, lv_disp_get_hor_res(nullptr) - 8, 28);
-  lv_obj_t* l = lv_obj_get_child(b, 0);
-  lv_label_set_text(l, text);
-  lv_obj_align(l, LV_ALIGN_LEFT_MID, 6, 0);
-  return b;
-}
-// A row's tap rebuilds the page the row is on: do it after the event, never
-// inside the clicked object's own handler.
-static void mtShowAsyncCb(void* v) { if (s_mt_root) mtShow((uint8_t)(uintptr_t)v); }
-static void mtShowLater(uint8_t view) {
-  lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
-  lv_async_call(mtShowAsyncCb, (void*)(uintptr_t)view);
-}
-static void mtChanCb(lv_event_t* e) {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  s_mt_chan = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-  mtShowLater(MTV_CHAN);
-}
-static void mtDmListCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_DMLIST); }
-static void mtNodesCb(lv_event_t* e)  { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_NODES); }
-static void mtPeerCb(lv_event_t* e) {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  s_mt_peer = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
-  mtShowLater(MTV_DM);
-}
+static lv_coord_t mtTop() { return statusBarCurH() - STATUSBAR_H + 2; }
+static lv_coord_t mtW() { return lv_disp_get_hor_res(nullptr); }
+static lv_coord_t mtH() { return appPageContentH(); }
+static const lv_coord_t MT_BTN_H = 26, MT_ROW_H = 22, MT_HINT_H = 14;
+static lv_coord_t mtBtnY() { return mtH() - 4 - MT_BTN_H; }
 
 static void mtAge(uint32_t ms, char* out, size_t cap) {
   const uint32_t s = (millis() - ms) / 1000;
@@ -360,7 +345,365 @@ static void mtAge(uint32_t ms, char* out, size_t cap) {
   else if (s < 86400) snprintf(out, cap, "%luh", (unsigned long)(s / 3600));
   else snprintf(out, cap, "%lud", (unsigned long)(s / 86400));
 }
+static const char* mtChanName(uint8_t i) {
+  const DualMesh::MtChannel& ch = DualMesh::cfg().ch[i];
+  return (i == 0 && !ch.name[0]) ? DualMesh::mtPrimaryName() : ch.name;
+}
+static bool mtSlotUsed(uint8_t i) {
+  const DualMesh::MtChannel& ch = DualMesh::cfg().ch[i];
+  return i == 0 || (ch.enabled && ch.name[0]);
+}
 
+// ---- building blocks -------------------------------------------------------
+static lv_obj_t* mtLabel(lv_obj_t* parent, const char* text, uint32_t color) {
+  lv_obj_t* l = lv_label_create(parent);
+  lv_label_set_text(l, text);
+  sdStyleTermLabel(l, &lv_font_unscii_8, color);
+  return l;
+}
+static void mtStyleScroll(lv_obj_t* o) {
+  lv_obj_add_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(o, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(o, LV_SCROLLBAR_MODE_ON);
+  lv_obj_set_style_bg_color(o, lv_color_hex(sdInk()), LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_SCROLLBAR);
+  lv_obj_set_style_width(o, 4, LV_PART_SCROLLBAR);
+  lv_obj_set_style_radius(o, 0, LV_PART_SCROLLBAR);
+  lv_obj_set_style_pad_right(o, 1, LV_PART_SCROLLBAR);
+}
+// A bordered box. Column flex; `scroll` makes it the view's scroller.
+static lv_obj_t* mtBox(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, bool scroll) {
+  lv_obj_t* b = lv_obj_create(parent);
+  lv_obj_remove_style_all(b);
+  lv_obj_set_size(b, w, h);
+  lv_obj_set_style_bg_color(b, lv_color_hex(0x000000), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(b, lv_color_hex(scoobyTermOn() ? TERM_DIM : COLOR_BORDER), LV_PART_MAIN);
+  lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+  lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(b, 3, LV_PART_MAIN);
+  lv_obj_set_style_pad_right(b, scroll ? 8 : 3, LV_PART_MAIN);
+  lv_obj_set_style_pad_row(b, 0, LV_PART_MAIN);
+  lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
+  if (scroll) mtStyleScroll(b); else lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  return b;
+}
+// A tappable row. `ev` gets SHORT_CLICKED (tap) and LONG_PRESSED (hold).
+static lv_obj_t* mtRow(lv_obj_t* parent, lv_coord_t h, lv_event_cb_t ev, void* ud) {
+  lv_obj_t* r = lv_obj_create(parent);
+  lv_obj_remove_style_all(r);
+  lv_obj_set_size(r, lv_pct(100), h);
+  lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_color(r, lv_color_hex(scoobyTermOn() ? TERM_DARK : COLOR_CONTROL_PRESSED), LV_PART_MAIN | LV_STATE_PRESSED);
+  lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_PRESSED);
+  if (ev) {
+    lv_obj_add_event_cb(r, ev, LV_EVENT_SHORT_CLICKED, ud);
+    lv_obj_add_event_cb(r, ev, LV_EVENT_LONG_PRESSED, ud);
+  }
+  return r;
+}
+static lv_obj_t* mtRowText(lv_obj_t* row, const char* text, uint32_t color, lv_align_t al, lv_coord_t x, lv_coord_t w) {
+  lv_obj_t* l = mtLabel(row, text, color);
+  if (w > 0) { lv_obj_set_width(l, w); lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP); }
+  lv_obj_align(l, al, x, 0);
+  return l;
+}
+// "(n)": black on green when n is new, dim otherwise.
+static void mtBadge(lv_obj_t* row, unsigned n, bool hot) {
+  char b[12];
+  snprintf(b, sizeof b, "(%u)", n);
+  lv_obj_t* l = mtLabel(row, b, hot ? 0x000000 : sdDim());
+  if (hot) {
+    lv_obj_set_style_bg_color(l, lv_color_hex(sdInk()), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(l, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(l, 1, LV_PART_MAIN);
+  }
+  lv_obj_align(l, LV_ALIGN_RIGHT_MID, -1, 0);
+}
+static void mtHint(const char* text) {
+  lv_obj_t* l = mtLabel(s_mt_root, text, sdDim());
+  lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -3);
+}
+static lv_obj_t* mtPinnedBtn(int idx, const char* text, lv_event_cb_t cb) {
+  const lv_coord_t bw = (mtW() - 8 - 4) / 2;
+  lv_obj_t* b = sdButton(s_mt_root, text, cb, nullptr, bw, MT_BTN_H);
+  lv_obj_set_pos(b, 4 + idx * (bw + 4), mtBtnY());
+  return b;
+}
+
+// A view change from inside an event: after the event, never in the clicked
+// object's own handler (the rebuild deletes it).
+static void mtShowAsyncCb(void* v) { if (s_mt_root) mtShow((uint8_t)(uintptr_t)v); }
+static void mtShowLater(uint8_t view) {
+  lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
+  lv_async_call(mtShowAsyncCb, (void*)(uintptr_t)view);
+}
+
+// ---- popups ----------------------------------------------------------------
+static void mtPopDelete() {
+  if (s_mt_pop && lv_obj_is_valid(s_mt_pop)) lv_obj_del(s_mt_pop);
+  s_mt_pop = nullptr; s_mt_pop_name = nullptr; s_mt_pop_key = nullptr;
+}
+static void mtPopCloseAsync(void*) { mtPopDelete(); }
+static void mtPopClose() {   // from a popup's own button: after the event
+  lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
+  lv_async_call(mtPopCloseAsync, nullptr);
+}
+static void mtPopCloseCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtPopClose(); }
+// Dimmed modal overlay with a bordered panel; returns the panel.
+static lv_obj_t* mtPopOpen(lv_coord_t pw, lv_coord_t ph, lv_coord_t py, const char* title) {
+  mtPopDelete();
+  // On the top layer, over the page root: it is then the frontmost layer-top
+  // child, so trackball / keyboard focus stays inside the popup.
+  s_mt_pop = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(s_mt_pop);
+  lv_obj_set_size(s_mt_pop, mtW(), mtH());
+  lv_obj_set_pos(s_mt_pop, 0, appPageContentTop());
+  lv_obj_set_style_bg_color(s_mt_pop, lv_color_hex(0x000000), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(s_mt_pop, LV_OPA_70, LV_PART_MAIN);
+  lv_obj_add_flag(s_mt_pop, LV_OBJ_FLAG_CLICKABLE);   // modal
+  lv_obj_clear_flag(s_mt_pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* p = lv_obj_create(s_mt_pop);
+  lv_obj_remove_style_all(p);
+  lv_obj_set_size(p, pw, ph);
+  if (py < 0) lv_obj_center(p); else lv_obj_align(p, LV_ALIGN_TOP_MID, 0, py);
+  lv_obj_set_style_bg_color(p, lv_color_hex(0x000000), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(p, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(p, lv_color_hex(sdInk()), LV_PART_MAIN);
+  lv_obj_set_style_border_width(p, 2, LV_PART_MAIN);
+  lv_obj_set_style_radius(p, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(p, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* t = mtLabel(p, title, sdInk());
+  lv_obj_set_pos(t, 8, 6);
+  lv_obj_update_layout(p);   // callers place children from the panel's real size
+  return p;
+}
+// Two buttons along the panel's bottom edge.
+static lv_obj_t* mtPopBtn(lv_obj_t* panel, int idx, const char* text, lv_event_cb_t cb, bool danger) {
+  const lv_coord_t pw = lv_obj_get_width(panel);
+  const lv_coord_t bw = (pw - 3 * 10) / 2;
+  lv_obj_t* b = sdButton(panel, text, cb, nullptr, bw, MT_BTN_H - 4);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 10 + idx * (bw + 10), -8);
+  if (danger) {
+    lv_obj_set_style_border_color(b, lv_color_hex(TERM_RED), LV_PART_MAIN);
+    lv_obj_set_style_text_color(lv_obj_get_child(b, 0), lv_color_hex(TERM_RED), LV_PART_MAIN);
+  }
+  return b;
+}
+static void mtConfirm(const char* msg, lv_event_cb_t yes, const char* yesText) {
+  lv_obj_t* p = mtPopOpen(mtW() - 40, 104, -1, "> CONFIRM");
+  lv_obj_t* l = mtLabel(p, msg, sdInk());
+  lv_obj_set_width(l, lv_obj_get_width(p) - 20);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_set_style_text_line_space(l, 4, LV_PART_MAIN);
+  lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 26);
+  mtPopBtn(p, 0, "[ CANCEL ]", mtPopCloseCb, false);
+  mtPopBtn(p, 1, yesText, yes, true);
+}
+
+// ---- node details / delete -------------------------------------------------
+static void mtNodeDmCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  s_mt_peer = s_mt_pop_num;
+  s_mt_dm_back = MTV_HEARD;
+  mtShowLater(MTV_DM);   // the rebuild removes the popup
+}
+static void mtNodePopup(uint32_t num) {
+  using namespace DualMesh;
+  Mt::Node nd {};
+  const bool known = Mt::nodeByNum(num, nd);
+  char sn[8], ln[40], hw[24], age[8], pos[40], batt[12], hops[16], snr[16], rssi[16];
+  Mt::nodeNames(num, sn, sizeof sn, ln, sizeof ln);
+  snprintf(hw, sizeof hw, "?");
+  if (known && nd.hasUser) { const char* h = Mt::hwName(nd.hwModel, hw, sizeof hw); if (h != hw) snprintf(hw, sizeof hw, "%s", h); }
+  snprintf(age, sizeof age, "?"); if (known) mtAge(nd.lastMs, age, sizeof age);
+  if (known && nd.hasPos) snprintf(pos, sizeof pos, "%.4f, %.4f", nd.latI / 1e7, nd.lonI / 1e7);
+  else snprintf(pos, sizeof pos, "no GPS");
+  if (!known || !nd.battery) snprintf(batt, sizeof batt, "?");
+  else if (nd.battery > 100) snprintf(batt, sizeof batt, "powered");
+  else snprintf(batt, sizeof batt, "%u%%", nd.battery);
+  if (!known || nd.hops == 0xFF) snprintf(hops, sizeof hops, "?");
+  else if (nd.hops == 0) snprintf(hops, sizeof hops, "0 (direct)");
+  else snprintf(hops, sizeof hops, "%u", nd.hops);
+  if (known) { snprintf(snr, sizeof snr, "%+.1f dB", nd.snr4 / 4.0); snprintf(rssi, sizeof rssi, "%d dBm", nd.rssi); }
+  else { snprintf(snr, sizeof snr, "?"); snprintf(rssi, sizeof rssi, "?"); }
+  char body[400];
+  snprintf(body, sizeof body,
+           "LONG   %s\nSHORT  %s\nID     !%08lx\nHW     %s\nROLE   %s\nHEARD  %s ago\nSNR    %s\nRSSI   %s\n"
+           "HOPS   %s\nPOS    %s\nBATT   %s\nPKI    %s",
+           ln[0] ? ln : "?", sn[0] ? sn : "?", (unsigned long)num, hw,
+           known && nd.hasUser ? Mt::roleName(nd.role) : "?", age, snr, rssi, hops, pos, batt,
+           known && nd.hasKey ? "key known (DMs encrypted)" : "no key yet");
+  const lv_coord_t ph = LV_MIN(mtH() - 8, 204);
+  lv_obj_t* p = mtPopOpen(mtW() - 24, ph, -1, "> NODE");
+  s_mt_pop_num = num;
+  lv_obj_t* l = mtLabel(p, body, sdInk());
+  lv_obj_set_width(l, mtW() - 24 - 20);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_line_space(l, 3, LV_PART_MAIN);
+  lv_obj_set_pos(l, 10, 20);
+  mtPopBtn(p, 0, "[ DM ]", mtNodeDmCb, false);
+  mtPopBtn(p, 1, "[ CLOSE ]", mtPopCloseCb, false);
+}
+static void mtNodeDeleteYesCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  DualMesh::Mt::deleteNode(s_mt_pop_num);
+  mtShowLater(MTV_HEARD);
+}
+static void mtHeardRowCb(lv_event_t* e) {
+  const lv_event_code_t c = lv_event_get_code(e);
+  const uint32_t num = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+  if (c == LV_EVENT_SHORT_CLICKED) mtNodePopup(num);
+  else if (c == LV_EVENT_LONG_PRESSED) {
+    char sn[8], ln[40], msg[80];
+    if (!DualMesh::Mt::nodeNames(num, sn, sizeof sn, ln, sizeof ln) || !sn[0]) snprintf(sn, sizeof sn, "%04lx", (unsigned long)(num & 0xFFFF));
+    snprintf(msg, sizeof msg, "DELETE NODE %s\nFROM LIST?", sn);
+    mtConfirm(msg, mtNodeDeleteYesCb, "[ DELETE ]");
+    s_mt_pop_num = num;
+    lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);   // no tap on release
+  }
+}
+
+// One "name  !id  age  snr" line.
+static void mtNodeLine(const DualMesh::Mt::Node& nd, char* out, size_t cap, bool withHops) {
+  char nm[40], age[8];
+  DualMesh::Mt::nodeName(nd.num, nm, sizeof nm);
+  mtAge(nd.lastMs, age, sizeof age);
+  char h[6] = "";
+  if (withHops) { if (nd.hops == 0xFF) snprintf(h, sizeof h, " H?"); else snprintf(h, sizeof h, " H%u", nd.hops > 9 ? 9 : nd.hops); }
+  snprintf(out, cap, "%-12.12s !%08lx %3s %+5.1f%s", nm, (unsigned long)nd.num, age, nd.snr4 / 4.0, h);
+}
+
+// ---- DMs -------------------------------------------------------------------
+static void mtDmDeleteYesCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  DualMesh::Mt::deleteDm(s_mt_pop_num);
+  mtShowLater(MTV_DMLIST);
+}
+static void mtDmRowCb(lv_event_t* e) {
+  const lv_event_code_t c = lv_event_get_code(e);
+  const uint32_t peer = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+  if (c == LV_EVENT_SHORT_CLICKED) { s_mt_peer = peer; s_mt_dm_back = MTV_DMLIST; mtShowLater(MTV_DM); }
+  else if (c == LV_EVENT_LONG_PRESSED) {
+    char sn[8], ln[40], msg[80];
+    if (!DualMesh::Mt::nodeNames(peer, sn, sizeof sn, ln, sizeof ln) || !sn[0]) snprintf(sn, sizeof sn, "%04lx", (unsigned long)(peer & 0xFFFF));
+    snprintf(msg, sizeof msg, "DELETE CONVERSATION\nWITH %s?", sn);
+    mtConfirm(msg, mtDmDeleteYesCb, "[ DELETE ]");
+    s_mt_pop_num = peer;
+    lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
+  }
+}
+
+// ---- Edit channels ---------------------------------------------------------
+static void mtEditSave() {
+  using namespace DualMesh;
+  if (s_mt_edit_slot < 0 || !sdOk(s_mt_pop_name)) return;
+  kbMirrorSyncToReal();
+  const uint8_t i = (uint8_t)s_mt_edit_slot;
+  const char* nm = sdTxt(s_mt_pop_name);
+  const char* key = sdTxt(s_mt_pop_key);
+  if (i > 0 && !nm[0]) { if (g_lv.task) g_lv.task->showAlert("A channel needs a name", 1600); return; }
+  if (!setChannel(i, nm, key[0] ? key : "AQ==", true)) {
+    if (g_lv.task) g_lv.task->showAlert("Bad PSK: 32/64 hex digits, base64 (AQ==), 1-10, or 0 for none", 2200);
+    return;
+  }
+  save();
+  radio_driver.configChanged();
+  s_mt_sel = (int8_t)i;
+  char b[64];
+  snprintf(b, sizeof b, "Channel %u saved: %s", i, mtChanName(i));
+  if (g_lv.task) g_lv.task->showAlert(b, 1600);
+  mtShowLater(MTV_EDIT);
+}
+static void mtEditSaveCb(lv_event_t* e) {
+  const lv_event_code_t c = lv_event_get_code(e);
+  if (c == LV_EVENT_CLICKED || c == LV_EVENT_READY) mtEditSave();
+}
+static lv_obj_t* mtPopField(lv_obj_t* p, const char* label, const char* ph, uint32_t maxLen, lv_coord_t y) {
+  lv_obj_t* l = mtLabel(p, label, sdDim());
+  lv_obj_set_pos(l, 10, y + 9);
+  lv_obj_t* ta = lv_textarea_create(p);
+  lv_obj_set_size(ta, lv_obj_get_width(p) - 60, 28);
+  lv_obj_set_pos(ta, 50, y);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_max_length(ta, maxLen);
+  lv_obj_set_style_text_font(ta, &g_font_14, LV_PART_MAIN);
+  useChainedFont(ta);
+  taSetPlaceholder(ta, ph);
+  attachSettingsTaEvents(ta);
+  lv_obj_add_event_cb(ta, mtEditSaveCb, LV_EVENT_READY, nullptr);
+  return ta;
+}
+// The name + PSK entry, as in Settings > Scooby Deck: hex 32/64, base64, 1-10, 0.
+static void mtEditPopup(uint8_t slot) {
+  using namespace DualMesh;
+  s_mt_edit_slot = (int8_t)slot;
+  char t[32];
+  snprintf(t, sizeof t, mtSlotUsed(slot) ? "> EDIT CHANNEL %u" : "> ADD CHANNEL %u", slot);
+  lv_obj_t* p = mtPopOpen(mtW() - 16, 128, 2, t);   // at the top: the keyboard comes up below
+  const MtChannel& ch = cfg().ch[slot];
+  s_mt_pop_name = mtPopField(p, "NAME", slot == 0 ? mtPresetName() : "e.g. NYC-Local", 11, 20);
+  s_mt_pop_key = mtPopField(p, "PSK", "hex / base64 / 1-10 (empty = AQ==)", 64, 52);
+  if (mtSlotUsed(slot)) {
+    lv_textarea_set_text(s_mt_pop_name, ch.name);
+    char hex[72] = "";
+    if (ch.keyLen) keyHex(ch, hex, sizeof hex); else snprintf(hex, sizeof hex, "0");
+    lv_textarea_set_text(s_mt_pop_key, hex);
+  }
+  mtPopBtn(p, 0, "[ SAVE ]", mtEditSaveCb, false);
+  mtPopBtn(p, 1, "[ CANCEL ]", mtPopCloseCb, false);
+}
+static void mtEditRowCb(lv_event_t* e) {
+  const lv_event_code_t c = lv_event_get_code(e);
+  const uint8_t slot = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+  if (c == LV_EVENT_SHORT_CLICKED) { s_mt_sel = (int8_t)slot; mtShowLater(MTV_EDIT); }
+  else if (c == LV_EVENT_LONG_PRESSED) {
+    s_mt_sel = (int8_t)slot;
+    lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
+    mtEditPopup(slot);
+  }
+}
+static void mtAddCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  int slot = -1;
+  if (s_mt_sel > 0 && !mtSlotUsed((uint8_t)s_mt_sel)) slot = s_mt_sel;
+  for (uint8_t i = 1; slot < 0 && i < DualMesh::MT_CHANNELS; i++) if (!mtSlotUsed(i)) slot = i;
+  if (slot < 0) { if (g_lv.task) g_lv.task->showAlert("All 8 channel slots are in use: remove one first", 1800); return; }
+  mtEditPopup((uint8_t)slot);
+}
+static void mtRemoveYesCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  using namespace DualMesh;
+  if (s_mt_sel <= 0 || s_mt_sel >= (int)MT_CHANNELS) return;
+  setChannel((uint8_t)s_mt_sel, "", "none", false);
+  save();
+  radio_driver.configChanged();
+  if (g_lv.task) g_lv.task->showAlert("Channel removed", 1400);
+  mtShowLater(MTV_EDIT);
+}
+static void mtRemoveCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (s_mt_sel == 0) { if (g_lv.task) g_lv.task->showAlert("Channel 0 is the primary: it can't be removed (hold it to edit)", 2000); return; }
+  if (s_mt_sel < 0 || !mtSlotUsed((uint8_t)s_mt_sel)) { if (g_lv.task) g_lv.task->showAlert("Tap a channel to select it first", 1600); return; }
+  char msg[64];
+  snprintf(msg, sizeof msg, "REMOVE CHANNEL %d\n%s?", s_mt_sel, mtChanName((uint8_t)s_mt_sel));
+  mtConfirm(msg, mtRemoveYesCb, "[ REMOVE ]");
+}
+
+// ---- home ------------------------------------------------------------------
+static void mtHeardBoxCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_HEARD); }
+static void mtChanRowCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_SHORT_CLICKED) return;
+  s_mt_chan = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+  mtShowLater(MTV_CHAN);
+}
+static void mtDmsBtnCb(lv_event_t* e)  { if (lv_event_get_code(e) == LV_EVENT_CLICKED) mtShowLater(MTV_DMLIST); }
+static void mtEditBtnCb(lv_event_t* e) { if (lv_event_get_code(e) == LV_EVENT_CLICKED) { s_mt_sel = -1; mtShowLater(MTV_EDIT); } }
+
+// ---- chats -----------------------------------------------------------------
 static void mtFillMsgs() {
   if (!s_mt_msgs || !lv_obj_is_valid(s_mt_msgs)) return;
   using namespace DualMesh;
@@ -392,18 +735,13 @@ static void mtFillMsgs() {
     lv_obj_set_style_text_color(l, lv_color_hex(m.outgoing ? sdDim() : sdInk()), LV_PART_MAIN);
     shown++;
   }
-  if (!shown) {
-    lv_obj_t* l = lv_label_create(s_mt_msgs);
-    lv_label_set_text(l, "-- no messages yet --");
-    sdStyleTermLabel(l, &lv_font_unscii_8, sdDim());
-  }
+  if (!shown) mtLabel(s_mt_msgs, "-- no messages yet --", sdDim());
   lv_obj_update_layout(s_mt_msgs);
   lv_obj_scroll_to_y(s_mt_msgs, LV_COORD_MAX, LV_ANIM_OFF);
   if (s_mt_view == MTV_CHAN) Mt::markRead(s_mt_chan);
-  else if (s_mt_view == MTV_DM) Mt::markRead(Mt::DM_CHAN);
+  else if (s_mt_view == MTV_DM) Mt::markReadDm(s_mt_peer);
   s_mt_seq = Mt::changeSeq();
 }
-
 static void mtSend() {
   if (!s_mt_ta || !lv_obj_is_valid(s_mt_ta)) return;
   kbMirrorSyncToReal();
@@ -424,98 +762,191 @@ static void mtSendCb(lv_event_t* e) {
   if (c == LV_EVENT_CLICKED || c == LV_EVENT_READY) mtSend();
 }
 
+static bool mtPointerDown() {
+  for (lv_indev_t* i = lv_indev_get_next(nullptr); i; i = lv_indev_get_next(i))
+    if (i->proc.state == LV_INDEV_STATE_PRESSED) return true;
+  return false;
+}
 static void mtTimerCb(lv_timer_t*) {
   if (!s_mt_root) return;
   if (DualMesh::Mt::changeSeq() == s_mt_seq) return;
-  if (s_mt_view == MTV_CHAN || s_mt_view == MTV_DM) mtFillMsgs();
-  else mtShow(s_mt_view);   // lists: counts changed
+  if (s_mt_view == MTV_CHAN || s_mt_view == MTV_DM) { mtFillMsgs(); return; }
+  // Lists: refresh at most every 2 s, never under a finger or an open popup
+  // (a rebuild would cancel the hold / close the popup).
+  if (s_mt_pop || mtPointerDown() || millis() - s_mt_built_ms < 2000) return;
+  if (s_mt_view == MTV_EDIT) { s_mt_seq = DualMesh::Mt::changeSeq(); return; }   // nothing live there
+  mtShow(s_mt_view);
 }
 
+// ---- the views ---------------------------------------------------------------
 static void mtShow(uint8_t view) {
   using namespace DualMesh;
   if (!s_mt_root) return;
+  // A refresh of the same list keeps its scroll position.
+  lv_coord_t keepY = 0;
+  if (view == s_mt_view && s_mt_scroll && lv_obj_is_valid(s_mt_scroll)) keepY = lv_obj_get_scroll_y(s_mt_scroll);
   s_mt_view = view;
-  s_mt_msgs = nullptr; s_mt_ta = nullptr;
+  s_mt_msgs = nullptr; s_mt_ta = nullptr; s_mt_scroll = nullptr;
+  mtPopDelete();   // never called from inside a popup's own event (those go through mtShowLater)
   lv_obj_clean(s_mt_root);
-  const lv_coord_t w = lv_disp_get_hor_res(nullptr);
+  const lv_coord_t w = mtW(), top = mtTop();
   char t[96];
   switch (view) {
-    case MTV_LIST: {
+    case MTV_HOME: {
       snprintf(s_mt_title, sizeof s_mt_title, "Meshtastic");
-      lv_obj_t* c = mtListContainer();
+      lv_obj_t* col = lv_obj_create(s_mt_root);
+      lv_obj_remove_style_all(col);
+      lv_obj_set_size(col, w - 4, mtBtnY() - 4 - top);
+      lv_obj_set_pos(col, 4, top);
+      lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+      lv_obj_set_style_pad_row(col, 4, LV_PART_MAIN);
+      lv_obj_set_style_pad_right(col, 7, LV_PART_MAIN);
+      mtStyleScroll(col);
+      s_mt_scroll = col;
       if (cfg().mode == MODE_MESHCORE) {
-        lv_obj_t* l = lv_label_create(c);
-        lv_obj_set_width(l, w - 8);
+        lv_obj_t* l = mtLabel(col, "! MESHCORE-ONLY MODE: MESHTASTIC IS OFF. SETTINGS > SCOOBY DECK.", TERM_AMBER);
+        lv_obj_set_width(l, lv_pct(100));
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_label_set_text(l, "! MESHCORE-ONLY MODE: MESHTASTIC RX/TX IS OFF. CHANGE IT IN SETTINGS > SCOOBY DECK.");
-        sdStyleTermLabel(l, &lv_font_unscii_8, TERM_AMBER);
       }
-      for (uint8_t i = 0; i < MT_CHANNELS; i++) {
-        const MtChannel& ch = cfg().ch[i];
-        if (i > 0 && !ch.enabled) continue;
-        const char* nm = (i == 0 && !ch.name[0]) ? mtPrimaryName() : ch.name;
-        const uint16_t u = Mt::unread(i);
-        if (u) snprintf(t, sizeof t, "[#%u] %-12s (%u NEW)", i, nm, u);
-        else   snprintf(t, sizeof t, "[#%u] %s", i, nm);
-        mtRowBtn(c, t, mtChanCb, (void*)(intptr_t)i);
+      // LAST HEARD: the 3 newest; the whole box opens the full list.
+      lv_obj_t* lh = mtBox(col, lv_pct(100), LV_SIZE_CONTENT, false);
+      lv_obj_add_flag(lh, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_style_bg_color(lh, lv_color_hex(scoobyTermOn() ? TERM_DARK : COLOR_CONTROL_PRESSED), LV_PART_MAIN | LV_STATE_PRESSED);
+      lv_obj_add_event_cb(lh, mtHeardBoxCb, LV_EVENT_CLICKED, nullptr);
+      mtLabel(lh, "> LAST HEARD", sdInk());
+      const uint8_t nn = Mt::nodeCount();
+      if (!nn) {
+        lv_obj_t* r = mtRow(lh, MT_ROW_H, nullptr, nullptr); lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+        mtRowText(r, "-- no nodes heard yet --", sdDim(), LV_ALIGN_LEFT_MID, 0, 0);
       }
-      const uint16_t du = Mt::unread(Mt::DM_CHAN);
-      if (du) snprintf(t, sizeof t, "[DM] DIRECT MESSAGES (%u NEW)", du);
-      else    snprintf(t, sizeof t, "[DM] DIRECT MESSAGES");
-      mtRowBtn(c, t, mtDmListCb, nullptr);
-      snprintf(t, sizeof t, "[NODES] HEARD %u", Mt::nodeCount());
-      mtRowBtn(c, t, mtNodesCb, nullptr);
-      break;
-    }
-    case MTV_DMLIST: case MTV_NODES: {
-      snprintf(s_mt_title, sizeof s_mt_title, view == MTV_DMLIST ? "Direct messages" : "Nodes");
-      lv_obj_t* c = mtListContainer();
-      // Peers: anyone we have DM'd or heard a DM from, then the heard nodes.
-      uint32_t peers[48]; int np = 0;
-      if (view == MTV_DMLIST) {
-        static Mt::Msg m;
-        for (int i = (int)Mt::msgCount() - 1; i >= 0 && np < 48; i--) {
-          if (!Mt::msgAt((uint16_t)i, m) || m.chan != Mt::DM_CHAN || !m.peer) continue;
-          bool dup = false;
-          for (int k = 0; k < np; k++) dup |= peers[k] == m.peer;
-          if (!dup) peers[np++] = m.peer;
-        }
-      }
-      for (uint8_t i = 0; i < Mt::nodeCount() && np < 48; i++) {
+      for (uint8_t i = 0; i < nn && i < 3; i++) {
         Mt::Node nd;
         if (!Mt::nodeAt(i, nd)) continue;
-        bool dup = false;
-        for (int k = 0; k < np; k++) dup |= peers[k] == nd.num;
-        if (!dup) peers[np++] = nd.num;
+        mtNodeLine(nd, t, sizeof t, false);
+        lv_obj_t* r = mtRow(lh, MT_ROW_H, nullptr, nullptr);
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);   // taps land on the box
+        mtRowText(r, t, sdInk(), LV_ALIGN_LEFT_MID, 0, 0);
       }
+      lv_obj_t* hint = mtLabel(lh, nn > 3 ? "[ tap to open: all nodes ]" : "[ tap to open ]", sdDim());
+      lv_obj_set_width(hint, lv_pct(100));
+      lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+      lv_obj_set_style_pad_ver(hint, 2, LV_PART_MAIN);
+      // CHANNELS: one row each, with new (or stored) message counts.
+      lv_obj_t* cb = mtBox(col, lv_pct(100), LV_SIZE_CONTENT, false);
+      mtLabel(cb, "> CHANNELS", sdInk());
+      for (uint8_t i = 0; i < MT_CHANNELS; i++) {
+        if (!mtSlotUsed(i)) continue;
+        lv_obj_t* r = mtRow(cb, MT_ROW_H, mtChanRowCb, (void*)(uintptr_t)i);
+        snprintf(t, sizeof t, i == 0 ? "# %s (primary)" : "# %s", mtChanName(i));
+        mtRowText(r, t, sdInk(), LV_ALIGN_LEFT_MID, 0, w - 4 - 7 - 8 - 48);
+        const uint16_t u = Mt::unread(i);
+        mtBadge(r, u ? u : Mt::chanMsgCount(i), u != 0);
+      }
+      const uint16_t du = Mt::unread(Mt::DM_CHAN);
+      if (du) snprintf(t, sizeof t, "[ DMs (%u) ]", du); else snprintf(t, sizeof t, "[ DMs ]");
+      mtPinnedBtn(0, t, mtDmsBtnCb);
+      mtPinnedBtn(1, "[ EDIT ]", mtEditBtnCb);
+      break;
+    }
+    case MTV_HEARD: {
+      snprintf(s_mt_title, sizeof s_mt_title, "Last Heard");
+      lv_obj_t* box = mtBox(s_mt_root, w - 8, mtH() - top - MT_HINT_H - 4, true);
+      lv_obj_set_pos(box, 4, top);
+      s_mt_scroll = box;
+      const uint8_t nn = Mt::nodeCount();
+      snprintf(t, sizeof t, "> LAST HEARD  * %u NODE%s", nn, nn == 1 ? "" : "S");
+      mtLabel(box, t, sdInk());
+      if (!nn) mtLabel(box, "\n-- no nodes heard yet --", sdDim());
+      for (uint8_t i = 0; i < nn; i++) {
+        Mt::Node nd;
+        if (!Mt::nodeAt(i, nd)) continue;
+        mtNodeLine(nd, t, sizeof t, true);
+        lv_obj_t* r = mtRow(box, MT_ROW_H, mtHeardRowCb, (void*)(uintptr_t)nd.num);
+        mtRowText(r, t, sdInk(), LV_ALIGN_LEFT_MID, 0, 0);
+      }
+      mtHint("tap: details   hold: delete");
+      break;
+    }
+    case MTV_DMLIST: {
+      snprintf(s_mt_title, sizeof s_mt_title, "Direct messages");
+      lv_obj_t* box = mtBox(s_mt_root, w - 8, mtH() - top - MT_HINT_H - 4, true);
+      lv_obj_set_pos(box, 4, top);
+      s_mt_scroll = box;
+      // Conversations, newest first: anyone we have DM'd or heard a DM from.
+      static Mt::Msg m;
+      uint32_t peers[32]; uint16_t last[32]; int np = 0;
+      for (int i = (int)Mt::msgCount() - 1; i >= 0 && np < 32; i--) {
+        if (!Mt::msgAt((uint16_t)i, m) || m.chan != Mt::DM_CHAN || !m.peer) continue;
+        bool dup = false;
+        for (int k = 0; k < np; k++) dup |= peers[k] == m.peer;
+        if (!dup) { peers[np] = m.peer; last[np] = (uint16_t)i; np++; }
+      }
+      snprintf(t, sizeof t, "> DMs  * %d CONVERSATION%s", np, np == 1 ? "" : "S");
+      mtLabel(box, t, sdInk());
       if (!np) {
-        lv_obj_t* l = lv_label_create(c);
-        lv_label_set_text(l, "-- no nodes heard yet --");
-        sdStyleTermLabel(l, &lv_font_unscii_8, sdDim());
+        lv_obj_t* l = mtLabel(box, "\n-- no conversations yet --\n\nTo start one: [ LAST HEARD ] on the Meshtastic page, tap a node, [ DM ].", sdDim());
+        lv_obj_set_width(l, lv_pct(100));
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
       }
       for (int k = 0; k < np; k++) {
-        char nm[40]; Mt::nodeName(peers[k], nm, sizeof nm);
-        Mt::Node nd {}; bool known = false;
-        for (uint8_t i = 0; i < Mt::nodeCount(); i++) if (Mt::nodeAt(i, nd) && nd.num == peers[k]) { known = true; break; }
-        char age[8] = "-";
-        if (known) mtAge(nd.lastMs, age, sizeof age);
-        if (known) snprintf(t, sizeof t, "%s %s %ddB %s", nm, age, (int)nd.rssi, nd.hasKey ? "[PKI]" : "");
-        else       snprintf(t, sizeof t, "%s", nm);
-        mtRowBtn(c, t, mtPeerCb, (void*)(uintptr_t)peers[k]);
+        if (!Mt::msgAt(last[k], m)) continue;
+        lv_obj_t* r = mtRow(box, 36, mtDmRowCb, (void*)(uintptr_t)peers[k]);
+        lv_obj_set_style_border_side(r, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
+        lv_obj_set_style_border_color(r, lv_color_hex(scoobyTermOn() ? TERM_DARK : COLOR_HAIR), LV_PART_MAIN);
+        lv_obj_set_style_border_width(r, 1, LV_PART_MAIN);
+        char nm[40], age[8];
+        Mt::nodeName(peers[k], nm, sizeof nm);
+        mtAge(m.ms, age, sizeof age);
+        const uint16_t u = Mt::unreadDm(peers[k]);
+        lv_obj_t* n = mtLabel(r, nm, sdInk());
+        lv_obj_set_width(n, w - 8 - 11 - 80); lv_label_set_long_mode(n, LV_LABEL_LONG_CLIP);
+        lv_obj_align(n, LV_ALIGN_TOP_LEFT, 0, 4);
+        lv_obj_t* a = mtLabel(r, age, sdDim());
+        lv_obj_align(a, LV_ALIGN_TOP_RIGHT, u ? -36 : -1, 4);
+        if (u) {
+          char b[12]; snprintf(b, sizeof b, "(%u)", u);
+          lv_obj_t* bl = mtLabel(r, b, 0x000000);
+          lv_obj_set_style_bg_color(bl, lv_color_hex(sdInk()), LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(bl, LV_OPA_COVER, LV_PART_MAIN);
+          lv_obj_align(bl, LV_ALIGN_TOP_RIGHT, -1, 4);
+        }
+        snprintf(t, sizeof t, "%s%s", m.outgoing ? "> " : "", m.text);
+        lv_obj_t* pv = mtLabel(r, t, sdDim());
+        lv_obj_set_width(pv, w - 8 - 11 - 6); lv_label_set_long_mode(pv, LV_LABEL_LONG_DOT);
+        lv_obj_align(pv, LV_ALIGN_TOP_LEFT, 4, 18);
       }
+      mtHint("tap: open   hold: delete");
+      break;
+    }
+    case MTV_EDIT: {
+      snprintf(s_mt_title, sizeof s_mt_title, "Edit Channels");
+      lv_obj_t* box = mtBox(s_mt_root, w - 8, mtBtnY() - 4 - top, true);
+      lv_obj_set_pos(box, 4, top);
+      s_mt_scroll = box;
+      mtLabel(box, "> CHANNELS  0-7", sdInk());
+      for (uint8_t i = 0; i < MT_CHANNELS; i++) {
+        const bool used = mtSlotUsed(i), sel = s_mt_sel == (int8_t)i;
+        lv_obj_t* r = mtRow(box, 24, mtEditRowCb, (void*)(uintptr_t)i);
+        if (sel) {
+          lv_obj_set_style_bg_color(r, lv_color_hex(sdInk()), LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_PART_MAIN);
+        }
+        if (used) snprintf(t, sizeof t, i == 0 ? "%u  %s (primary)" : "%u  %s", i, mtChanName(i));
+        else snprintf(t, sizeof t, "%u  -- empty --", i);
+        mtRowText(r, t, sel ? 0x000000 : (used ? sdInk() : sdDim()), LV_ALIGN_LEFT_MID, 2, 0);
+        if (used && cfg().ch[i].keyLen == 0) mtRowText(r, "NO KEY", sel ? 0x000000 : TERM_AMBER, LV_ALIGN_RIGHT_MID, -2, 0);
+      }
+      lv_obj_t* note = mtLabel(box, "tap: select   hold: edit name/PSK", sdDim());
+      lv_obj_set_style_pad_top(note, 4, LV_PART_MAIN);
+      mtPinnedBtn(0, "[ ADD ]", mtAddCb);
+      mtPinnedBtn(1, "[ REMOVE ]", mtRemoveCb);
       break;
     }
     case MTV_CHAN: case MTV_DM: {
-      if (view == MTV_CHAN) {
-        const MtChannel& ch = cfg().ch[s_mt_chan];
-        snprintf(s_mt_title, sizeof s_mt_title, "#%s", (s_mt_chan == 0 && !ch.name[0]) ? mtPrimaryName() : ch.name);
-      } else {
-        char nm[32]; Mt::nodeName(s_mt_peer, nm, sizeof nm);
-        snprintf(s_mt_title, sizeof s_mt_title, "DM %s", nm);
-      }
-      const lv_coord_t top = mtTop();
+      if (view == MTV_CHAN) snprintf(s_mt_title, sizeof s_mt_title, "#%s", mtChanName(s_mt_chan));
+      else { char nm[32]; Mt::nodeName(s_mt_peer, nm, sizeof nm); snprintf(s_mt_title, sizeof s_mt_title, "DM %s", nm); }
       const lv_coord_t comp_h = 34;
-      const lv_coord_t h = appPageContentH() - top;
+      const lv_coord_t h = mtH() - top;
       s_mt_msgs = lv_obj_create(s_mt_root);
       lv_obj_remove_style_all(s_mt_msgs);
       lv_obj_set_size(s_mt_msgs, w - 8, h - comp_h - 6);
@@ -523,9 +954,10 @@ static void mtShow(uint8_t view) {
       lv_obj_set_flex_flow(s_mt_msgs, LV_FLEX_FLOW_COLUMN);
       lv_obj_set_style_pad_row(s_mt_msgs, 3, LV_PART_MAIN);
       lv_obj_set_style_pad_all(s_mt_msgs, 3, LV_PART_MAIN);
+      lv_obj_set_style_pad_right(s_mt_msgs, 8, LV_PART_MAIN);
       lv_obj_set_style_border_color(s_mt_msgs, lv_color_hex(sdDim()), LV_PART_MAIN);
       lv_obj_set_style_border_width(s_mt_msgs, 1, LV_PART_MAIN);
-      lv_obj_add_flag(s_mt_msgs, LV_OBJ_FLAG_SCROLLABLE);
+      mtStyleScroll(s_mt_msgs);
       const lv_coord_t send_w = 64;
       s_mt_ta = lv_textarea_create(s_mt_root);
       lv_obj_set_size(s_mt_ta, w - 8 - send_w - 4, comp_h - 4);
@@ -533,6 +965,7 @@ static void mtShow(uint8_t view) {
       lv_textarea_set_one_line(s_mt_ta, true);
       lv_textarea_set_max_length(s_mt_ta, view == MTV_DM ? 160 : 200);
       lv_obj_set_style_text_font(s_mt_ta, &g_font_14, LV_PART_MAIN);
+      useChainedFont(s_mt_ta);
       taSetPlaceholder(s_mt_ta, view == MTV_DM ? "Direct message..." : "Message channel...");
       attachSettingsTaEvents(s_mt_ta);
       lv_obj_add_event_cb(s_mt_ta, mtSendCb, LV_EVENT_READY, nullptr);
@@ -542,29 +975,44 @@ static void mtShow(uint8_t view) {
       break;
     }
   }
-  s_apppage_title = s_mt_title;
-  updateGlobalStatusBar();
+  if (s_mt_scroll && keepY > 0) {
+    lv_obj_update_layout(s_mt_scroll);
+    lv_obj_scroll_to_y(s_mt_scroll, keepY, LV_ANIM_OFF);
+  }
+  appPageBeginSlim(s_mt_title, closeMtChats);   // one-row bar, "< title" closes a level
   s_mt_seq = Mt::changeSeq();
+  s_mt_built_ms = millis();
 }
-// Back steps out one level: a chat goes back to the list, the list closes.
+// Back (the bar, or M) steps out one level: popup, then chat/list, then home,
+// then the page closes.
 static void closeMtChats() {
-  if (s_mt_root && s_mt_view != MTV_LIST) {
+  if (s_mt_root && s_mt_pop) { mtPopDelete(); return; }
+  if (s_mt_root && s_mt_view != MTV_HOME) {
     lv_indev_t* a = lv_indev_get_act(); if (a) lv_indev_wait_release(a);
-    mtShow(s_mt_view == MTV_DM ? MTV_DMLIST : MTV_LIST);
+    mtShow(s_mt_view == MTV_DM ? s_mt_dm_back : MTV_HOME);
     return;
   }
   if (s_mt_timer) { lv_timer_del(s_mt_timer); s_mt_timer = nullptr; }
-  s_mt_msgs = nullptr; s_mt_ta = nullptr;
+  s_mt_msgs = nullptr; s_mt_ta = nullptr; s_mt_scroll = nullptr;
+  mtPopDelete();
   if (s_mt_root) popupClose(&s_mt_root);
   appPageEnd(closeMtChats);
+}
+// Whoever deletes the page root: the popup (on the top layer) goes with it.
+static void mtRootDeleteCb(lv_event_t*) {
+  if (s_mt_pop && lv_obj_is_valid(s_mt_pop)) lv_obj_del_async(s_mt_pop);
+  s_mt_pop = nullptr; s_mt_pop_name = nullptr; s_mt_pop_key = nullptr;
+  s_mt_msgs = nullptr; s_mt_ta = nullptr; s_mt_scroll = nullptr;
 }
 static bool scoobyDashOpen() { return s_dash_root != nullptr; }
 static bool scoobyMtOpen() { return s_mt_root != nullptr; }
 static void scoobyOpenMtChats() {
   if (s_mt_root) return;
   s_mt_root = appPageCreateRoot(COLOR_BG);
-  appPageBegin("Meshtastic", closeMtChats);
-  mtShow(MTV_LIST);
+  lv_obj_add_event_cb(s_mt_root, mtRootDeleteCb, LV_EVENT_DELETE, nullptr);
+  appPageBeginSlim("Meshtastic", closeMtChats);
+  s_mt_view = MTV_HOME;
+  mtShow(MTV_HOME);
   s_mt_timer = lv_timer_create(mtTimerCb, 700, nullptr);
 }
 
@@ -597,8 +1045,6 @@ static const char* kSdBwOpts = "31.25 kHz\n62.5 kHz\n125 kHz\n250 kHz\n500 kHz";
 static const char* kSdSfOpts = "SF7\nSF8\nSF9\nSF10\nSF11\nSF12";
 static const char* kSdCrOpts = "4/5\n4/6\n4/7\n4/8";
 
-static bool sdOk(lv_obj_t* o) { return o && lv_obj_is_valid(o); }
-static const char* sdTxt(lv_obj_t* ta) { return sdOk(ta) ? lv_textarea_get_text(ta) : ""; }
 static void sdSetNum(lv_obj_t* ta, long v) { char b[16]; snprintf(b, sizeof b, "%ld", v); lv_textarea_set_text(ta, b); }
 
 static void sdModeCb(lv_event_t* e) {

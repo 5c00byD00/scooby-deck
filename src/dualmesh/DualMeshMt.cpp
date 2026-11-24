@@ -10,6 +10,7 @@
 #include "lora_dm.h"
 #include "lora_names.h"
 #include "lora_myname.h"
+#include "DualMeshStore.h"
 #include <Preferences.h>
 #include <esp_random.h>
 #include <esp_mac.h>
@@ -78,6 +79,7 @@ static void storeMsg(uint32_t from, uint32_t peer, uint32_t id, uint8_t chan, bo
     m.ms = millis(); m.from = from; m.peer = peer; m.id = id; m.chan = chan; m.outgoing = out ? 1 : 0;
     m.state = state; m.rssi = rssi; m.snr4 = snr4;
     strncpy(m.text, text ? text : "", sizeof m.text - 1);
+    m.unread = out ? 0 : 1;
     if (!out) s_unread[chan == DM_CHAN ? MT_CHANNELS : (chan < MT_CHANNELS ? chan : 0)]++;
     s_seq++;
     unlock();
@@ -102,6 +104,11 @@ static void noteNode(const Lora::Packet& pk, const Header& h) {
     n.hasKey = Lora::Dm::hasKey(h.from);
     s_seq++;
     unlock();
+}
+
+static Node* findNode(uint32_t num) {
+    for (uint8_t i = 0; i < s_nNodes; i++) if (s_nodes[i].num == num) return &s_nodes[i];
+    return nullptr;
 }
 
 static bool seen(uint32_t from, uint32_t id) {
@@ -143,6 +150,8 @@ static void announceIfDue() {
     if (n && s_radio && s_radio->queueMeshtastic(f, n)) { s_announced = true; s_announceAt = now; }
 }
 
+static void loadBlob(const char* name, bool keys);
+
 void begin(DualMeshRadioWrapper* radio) {
     s_radio = radio;
     if (!s_lock) s_lock = xSemaphoreCreateRecursiveMutex();
@@ -157,35 +166,62 @@ void begin(DualMeshRadioWrapper* radio) {
     const bool fresh = Lora::Dm::begin(s_me, c.mt_priv_set ? c.mt_priv : nullptr, rnd);
     if (fresh) { memcpy(c.mt_priv, Lora::Dm::privateKey(), 32); c.mt_priv_set = 1; save(); }
     setPkiOpener(&Lora::Dm::open);
-    // Learned names and keys
-    Preferences p;
-    if (p.begin("dualmesh", true)) {
-        size_t n = p.getBytesLength("names");
-        if (n && n < 8192) { uint8_t* b = (uint8_t*)malloc(n); if (b) { p.getBytes("names", b, n); Lora::Names::load(b, n); free(b); } }
-        n = p.getBytesLength("keys");
-        if (n && n < 8192) { uint8_t* b = (uint8_t*)malloc(n); if (b) { p.getBytes("keys", b, n); Lora::Dm::loadKeys(b, n); free(b); } }
-        p.end();
+    // Learned names and keys: /dm_names.bin, /dm_keys.bin on SPIFFS (v1.2.0);
+    // the old NVS blobs are read once and copied over.
+    loadBlob("names", false);
+    loadBlob("keys", true);
+}
+
+static bool s_namesFile = false, s_keysFile = false;   // in the file (else retried)
+
+static void loadBlob(const char* name, bool keys) {
+    long n = Store::length(name);
+    bool fromNvs = false;
+    uint8_t* b = nullptr;
+    if (n > 0 && n < 8192 && (b = (uint8_t*)malloc((size_t)n)) && Store::get(name, b, (size_t)n) == n) {
+    } else {
+        free(b); b = nullptr; n = 0;
+        Preferences p;
+        if (p.begin("dualmesh", true)) {
+            const size_t m = p.isKey(name) ? p.getBytesLength(name) : 0;
+            if (m && m < 8192 && (b = (uint8_t*)malloc(m))) { p.getBytes(name, b, m); n = (long)m; fromNvs = true; }
+            p.end();
+        }
     }
+    if (b && n > 0) {
+        lock();
+        if (keys) Lora::Dm::loadKeys(b, (size_t)n); else Lora::Names::load(b, (size_t)n);
+        unlock();
+        bool inFile = !fromNvs;
+        if (fromNvs) inFile = Store::put(name, b, (size_t)n);
+        (keys ? s_keysFile : s_namesFile) = inFile;
+        Serial.printf("[dm-store] %s: %ld bytes from %s\n", name, n, fromNvs ? "NVS (migrated)" : "SPIFFS");
+    } else {
+        (keys ? s_keysFile : s_namesFile) = true;   // nothing to keep
+    }
+    free(b);
+}
+
+static void saveBlob(const char* name, bool keys) {
+    const size_t n = keys ? Lora::Dm::keysBytesNeeded() : Lora::Names::bytesNeeded();
+    uint8_t* b = (uint8_t*)malloc(n ? n : 1);
+    if (!b) return;
+    lock();
+    const size_t w = keys ? Lora::Dm::saveKeys(b, n) : Lora::Names::save(b, n);
+    unlock();
+    const bool ok = Store::put(name, b, w);
+    free(b);
+    (keys ? s_keysFile : s_namesFile) = ok;
+    if (ok) { if (keys) Lora::Dm::keysSaved(); else Lora::Names::markSaved(); }
 }
 
 static void saveIfDirty() {
     const uint32_t now = millis();
     if (now - s_saveAt < 60000) return;
     s_saveAt = now;
-    if (!Lora::Names::dirty() && !Lora::Dm::keysDirty()) return;
-    Preferences p;
-    if (!p.begin("dualmesh", false)) return;
-    if (Lora::Names::dirty()) {
-        const size_t n = Lora::Names::bytesNeeded();
-        uint8_t* b = (uint8_t*)malloc(n ? n : 1);
-        if (b) { const size_t w = Lora::Names::save(b, n); p.putBytes("names", b, w); free(b); Lora::Names::markSaved(); }
-    }
-    if (Lora::Dm::keysDirty()) {
-        const size_t n = Lora::Dm::keysBytesNeeded();
-        uint8_t* b = (uint8_t*)malloc(n ? n : 1);
-        if (b) { const size_t w = Lora::Dm::saveKeys(b, n); p.putBytes("keys", b, w); free(b); Lora::Dm::keysSaved(); }
-    }
-    p.end();
+    storeRetry();   // config that could only go to NVS earlier
+    if (Lora::Names::dirty() || !s_namesFile) saveBlob("names", false);
+    if (Lora::Dm::keysDirty() || !s_keysFile) saveBlob("keys", true);
 }
 
 static RxDiag s_diag;
@@ -239,7 +275,24 @@ static void handle(const Lora::Packet& pk) {
     switch (d.data.portnum) {
         case PORT_NODEINFO:
             Lora::Names::learn(h.from, d.user.shortName, d.user.longName);
+            lock();
+            if (Node* n = findNode(h.from)) { n->hasUser = true; n->role = d.user.role; n->hwModel = (uint16_t)d.user.hwModel; }
+            unlock();
             s_seq++;
+            break;
+        case PORT_POSITION:
+            if (d.pos.hasLatLon && (d.pos.latI || d.pos.lonI)) {
+                lock();
+                if (Node* n = findNode(h.from)) { n->hasPos = true; n->latI = d.pos.latI; n->lonI = d.pos.lonI; s_seq++; }
+                unlock();
+            }
+            break;
+        case PORT_TELEMETRY:
+            if (d.tel.kind == 2 && d.tel.batteryLevel > 0) {
+                lock();
+                if (Node* n = findNode(h.from)) { n->battery = (uint8_t)(d.tel.batteryLevel > 101 ? 101 : d.tel.batteryLevel); s_seq++; }
+                unlock();
+            }
             break;
         case PORT_TEXT:
             if (d.pki) storeMsg(h.from, h.from, h.id, DM_CHAN, false, 0, d.text, pk.rssi, pk.snr4);
@@ -348,7 +401,72 @@ bool msgAt(uint16_t i, Msg& out) {
 }
 uint16_t unread(uint8_t chan) { return s_unread[chan == DM_CHAN ? MT_CHANNELS : (chan < MT_CHANNELS ? chan : 0)]; }
 uint16_t unreadTotal() { uint16_t t = 0; for (uint16_t u : s_unread) t += u; return t; }
-void markRead(uint8_t chan) { s_unread[chan == DM_CHAN ? MT_CHANNELS : (chan < MT_CHANNELS ? chan : 0)] = 0; s_seq++; }
+// Unread flags live on the messages; s_unread[] is the per-channel sum.
+static void recountDmUnread() {
+    uint16_t u = 0;
+    for (uint16_t i = 0; i < s_count; i++) { const Msg& m = s_msgs[(s_head + i) % MAX_MSGS]; if (m.chan == DM_CHAN && m.unread) u++; }
+    s_unread[MT_CHANNELS] = u;
+}
+void markRead(uint8_t chan) {
+    lock();
+    for (uint16_t i = 0; s_msgs && i < s_count; i++) { Msg& m = s_msgs[(s_head + i) % MAX_MSGS]; if (m.chan == chan) m.unread = 0; }
+    s_unread[chan == DM_CHAN ? MT_CHANNELS : (chan < MT_CHANNELS ? chan : 0)] = 0;
+    s_seq++;
+    unlock();
+}
+void markReadDm(uint32_t peer) {
+    if (!s_msgs) return;
+    lock();
+    bool any = false;
+    for (uint16_t i = 0; i < s_count; i++) { Msg& m = s_msgs[(s_head + i) % MAX_MSGS]; if (m.chan == DM_CHAN && m.peer == peer && m.unread) { m.unread = 0; any = true; } }
+    if (any) { recountDmUnread(); s_seq++; }
+    unlock();
+}
+uint16_t unreadDm(uint32_t peer) {
+    if (!s_msgs) return 0;
+    uint16_t u = 0;
+    lock();
+    for (uint16_t i = 0; i < s_count; i++) { const Msg& m = s_msgs[(s_head + i) % MAX_MSGS]; if (m.chan == DM_CHAN && m.peer == peer && m.unread) u++; }
+    unlock();
+    return u;
+}
+uint16_t chanMsgCount(uint8_t chan) {
+    if (!s_msgs) return 0;
+    uint16_t c = 0;
+    lock();
+    for (uint16_t i = 0; i < s_count; i++) if (s_msgs[(s_head + i) % MAX_MSGS].chan == chan) c++;
+    unlock();
+    return c;
+}
+void deleteDm(uint32_t peer) {
+    if (!s_msgs) return;
+    lock();
+    uint16_t w = 0;   // compact the ring in order, oldest first
+    for (uint16_t i = 0; i < s_count; i++) {
+        const Msg m = s_msgs[(s_head + i) % MAX_MSGS];
+        if (m.chan == DM_CHAN && m.peer == peer) continue;
+        s_msgs[(s_head + w) % MAX_MSGS] = m;
+        w++;
+    }
+    s_count = w;
+    recountDmUnread();
+    s_seq++;
+    unlock();
+}
+bool deleteNode(uint32_t num) {
+    lock();
+    bool hit = false;
+    for (uint8_t i = 0; i < s_nNodes; i++) {
+        if (s_nodes[i].num != num) continue;
+        s_nodes[i] = s_nodes[s_nNodes - 1];
+        s_nNodes--;
+        hit = true;
+        break;
+    }
+    if (hit) s_seq++;
+    unlock();
+    return hit;
+}
 uint32_t changeSeq() { return s_seq; }
 
 uint8_t nodeCount() { return s_nNodes; }
@@ -368,6 +486,21 @@ bool nodeAt(uint8_t i, Node& out) {
     unlock();
     return pick >= 0;
 }
+
+bool nodeNames(uint32_t num, char* shortOut, size_t sCap, char* longOut, size_t lCap) {
+    if (sCap) shortOut[0] = 0;
+    if (lCap) longOut[0] = 0;
+    return Lora::Names::lookup(num, shortOut, sCap, longOut, lCap);
+}
+bool nodeByNum(uint32_t num, Node& out) {
+    lock();
+    const Node* n = findNode(num);
+    if (n) out = *n;
+    unlock();
+    return n != nullptr;
+}
+const char* roleName(uint8_t role) { return Meshtastic::roleName(role); }
+const char* hwName(uint16_t model, char* buf, size_t cap) { return Meshtastic::hwModelName(model, buf, cap); }
 
 void nodeName(uint32_t num, char* out, size_t cap) {
     if (!out || !cap) return;

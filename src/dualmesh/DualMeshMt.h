@@ -24,6 +24,7 @@ struct Msg {
     uint8_t  state;       // outgoing DM: Dm::State; channel: 1 sent, 3 failed
     int8_t   snr4;
     int16_t  rssi;
+    uint8_t  unread;      // incoming, not yet seen (v1.2.0)
     char     text[200];
 };
 
@@ -34,6 +35,13 @@ struct Node {
     int8_t   snr4;
     uint8_t  hops;        // 0xFF unknown
     bool     hasKey;
+    // From NodeInfo / Position / device Telemetry when heard (v1.2.0)
+    bool     hasUser;
+    uint8_t  role;        // Meshtastic Config.DeviceConfig.Role
+    uint16_t hwModel;
+    bool     hasPos;
+    int32_t  latI, lonI;  // 1e-7 degrees
+    uint8_t  battery;     // 0 unknown, 1-100 %, 101 powered
 };
 
 void     begin(DualMeshRadioWrapper* radio);
@@ -49,13 +57,22 @@ uint16_t msgCount();
 bool     msgAt(uint16_t i, Msg& out);     // 0 = oldest
 uint16_t unread(uint8_t chan);            // DM_CHAN for all DMs
 uint16_t unreadTotal();
-void     markRead(uint8_t chan);
+void     markRead(uint8_t chan);          // DM_CHAN: every DM
+void     markReadDm(uint32_t peer);       // one DM conversation
+uint16_t unreadDm(uint32_t peer);
+uint16_t chanMsgCount(uint8_t chan);      // stored messages on a channel
+void     deleteDm(uint32_t peer);         // drop a DM conversation
+bool     deleteNode(uint32_t num);        // drop a node from the heard list (it comes back when heard)
 uint32_t changeSeq();                     // bumps when anything changes
 
 // Nodes
 uint8_t  nodeCount();
 bool     nodeAt(uint8_t i, Node& out);    // newest first
 void     nodeName(uint32_t num, char* out, size_t cap);
+bool     nodeNames(uint32_t num, char* shortOut, size_t sCap, char* longOut, size_t lCap);   // false if none learned
+bool     nodeByNum(uint32_t num, Node& out);
+const char* roleName(uint8_t role);
+const char* hwName(uint16_t model, char* buf, size_t cap);
 
 // RX diagnostics (v0.1.1): what became of each Meshtastic frame the radio handed up.
 struct RxDiag {

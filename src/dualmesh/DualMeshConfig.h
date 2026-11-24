@@ -1,6 +1,6 @@
 // DualMesh (WadaMesh fork) — persistent settings for the second mesh and the
-// time-division radio scheduler. Stored in NVS namespace "dualmesh", separate
-// from WadaMesh's own prefs so a stock WadaMesh image ignores it.
+// time-division radio scheduler. Stored in /dm_cfg.bin on SPIFFS since v1.2.0
+// (DualMeshStore.h); the old NVS namespace "dualmesh" is read once to migrate.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
@@ -61,6 +61,7 @@ Config&  cfg();
 void     load();
 void     save();
 void     resetDefaults();
+void     storeRetry();               // write to SPIFFS if an earlier save could not
 
 // Derived
 float    mtFreqMHz();             // the Meshtastic centre frequency the radio uses

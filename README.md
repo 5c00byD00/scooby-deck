@@ -5,11 +5,12 @@ receives on **both MeshCore and Meshtastic with one SX1262 radio**. It is a fork
 [WadaMesh](README.wadamesh.md) (ALLFATHER-BV), with the dual-mesh time-slicing from
 SquachWatch-CYD (skizzophrenic).
 
-> **Status:** early firmware. **v0.1.1** is the latest stable release.
-> Test builds are published as **alpha pre-releases** (`vX.Y.Z-alpha.N`), and the rolling
+> **Status:** early firmware. **v1.2.0-beta** is the current beta (pre-release); **v0.1.1** is
+> the latest stable release. Test builds are published as **pre-releases** (`vX.Y.Z-alpha.N`,
+> `vX.Y.Z-beta`), and the rolling
 > **`nightly`** pre-release always has the newest `main` build at a fixed URL:
 > https://github.com/5c00byD00/scooby-deck/releases/download/nightly/scooby-deck-tdeckplus-nightly-merged.bin
-> Alpha and nightly builds haven't been tested on hardware. Please report what the
+> Pre-release and nightly builds may not have been tested on hardware. Please report what the
 > dashboard's `[MTRX]` counters show (see below).
 
 ## Features
@@ -25,6 +26,14 @@ SquachWatch-CYD (skizzophrenic).
 - **Meshtastic client:** the node never rebroadcasts other nodes' packets (client-mute).
   - Up to 8 channels (name + PSK as hex, base64 or a default-key index).
   - Direct messages (PKI), NodeInfo announces, a node list and chats.
+  - **Meshtastic page (v1.2.0):** a *Last Heard* box (the 3 newest nodes; tap for the full list)
+    above a *Channels* list with new-message counters, with **[ DMs ]** and **[ EDIT ]** pinned
+    at the bottom.
+    - *Last Heard:* tap a node for its details (names, ID, hardware, role, SNR/RSSI, hops,
+      position, battery) and **[ DM ]**; hold to remove it from the list.
+    - *DMs:* your conversations with the newest message; tap to open, hold to delete.
+    - *Edit:* the 8 channel slots. Tap to select; **[ ADD ]** takes a name + PSK; **[ REMOVE ]**
+      removes the selected slot (not the primary, slot 0); hold a slot to edit it.
   - Sends wait for a clear channel and back off if it's busy.
 - **Names:** long name (up to 39 characters) and short name (up to 4). The long name can sync
   to the MeshCore node name.
@@ -38,26 +47,55 @@ SquachWatch-CYD (skizzophrenic).
   - App drawer tiles: *Dashboard* and *Mtastic*.
   - **Settings > Scooby Deck** has the channels, names and theme.
 - **Retro green terminal theme** across the whole UI, square and flat (can be switched off).
+- **Settings survive a reflash (v1.2.0):** the Meshtastic key, names, channels, mode and radio
+  settings are kept in files on the internal SPIFFS partition (see *Where settings live* below).
 
 ## Flashing
-Download `scooby-deck-tdeckplus-vX.Y.Z-merged.bin` from the
-[Releases](../../releases) page. It is a **merged image: flash it at offset `0x0`**.
+Each release has two files:
+
+| File | Flash at | Use it for |
+|---|---|---|
+| `scooby-deck-tdeckplus-vX.Y.Z-merged.bin` | **0x0** | First install, or recovering a board. Bootloader + partition table + app. Erases NVS (0x9000-0xE000). |
+| `scooby-deck-tdeckplus-vX.Y.Z-app.bin` | **0x10000** | Updating a board that already runs Scooby Deck / WadaMesh with this partition table. Only the app slot is written; NVS and SPIFFS are untouched. |
+
+Neither file reaches the SPIFFS partition at 0xC90000, so your settings, contacts and
+history are kept either way (from v1.2.0 on, the Meshtastic settings too).
 
 - **ESP Terminator / any web ESP flasher:** connect the T-Deck over USB-C. If it isn't
   detected, hold the trackball while pressing reset to enter download mode. Pick the
   `.bin`, set the address to **0x0**, and flash.
 - **Arduino app (esptool):** with the board on USB:
   ```
-  esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 scooby-deck-tdeckplus-v0.1.1-merged.bin
+  esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 scooby-deck-tdeckplus-v1.2.0-beta-merged.bin
+  # or, to update only the app:
+  esptool.py --chip esp32s3 --baud 921600 write_flash 0x10000 scooby-deck-tdeckplus-v1.2.0-beta-app.bin
   ```
+- The app-only file boots from slot app0. A board that was updated over the air into app1 needs
+  the merged image (or an OTA) instead.
 - Check the download against the SHA-256 in the release notes.
 - Press reset after flashing.
 
 Build it yourself (PlatformIO):
 ```
 pio run -e LilyGo_TDeck_companion_radio_touch -t mergebin
-# -> .pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin
+# -> .pio/build/LilyGo_TDeck_companion_radio_touch/firmware-merged.bin  (0x0)
+# -> .pio/build/LilyGo_TDeck_companion_radio_touch/firmware.bin         (0x10000)
 ```
+
+## Where settings live
+| What | Where | Survives a 0x0 flash? |
+|---|---|---|
+| Meshtastic settings: PKI key (`mt_priv`), long/short name, 8 channels, mesh mode, shared SF, preset/radio, TDM | SPIFFS `/dm_cfg.bin` (v1.2.0+) | yes |
+| Learned Meshtastic names and peer public keys | SPIFFS `/dm_names.bin`, `/dm_keys.bin` (v1.2.0+) | yes |
+| Terminal theme switch | SPIFFS `/dm_term.bin` (v1.2.0+) | yes |
+| MeshCore identity (node key) | SPIFFS identity file (NVS `mc_id` keeps a spare copy) | yes |
+| MeshCore prefs, contacts, channels, chat history | SPIFFS `/new_prefs`, `/contacts3`, `/channels2`, ... | yes |
+| WadaMesh touch settings, MQTT, keyboard rotation | SPIFFS `/prefs/*.kv` | yes |
+| Boot counters, boot-logo rotation, "store on SD" mirror | NVS (`mcboot`, `touch`) | no, rebuilt at boot |
+
+Each `/dm_*.bin` is written to a `.tmp` first, checked (CRC-32), then renamed over the old
+file, so a reset mid-save keeps the previous copy. The first boot of v1.2.0 copies anything
+still in the old NVS namespace `dualmesh` into these files.
 
 ## Test notes (v0.1.1): Shared SF Off, MediumSlow slot 48
 Set the T-Deck and the Meshtastic node the same way:
@@ -114,7 +152,8 @@ Scooby Deck is a **CLIENT_MUTE** Meshtastic node: it never rebroadcasts.
   mute client, the same as on stock firmware.
 
 ## Changes
-See [SCOOBY_DECK.md](SCOOBY_DECK.md) for the source layout and the per-version change notes.
+**v1.2.0-beta:** settings on SPIFFS (survive reflashing), new Meshtastic page (Last Heard,
+Channels, DMs, Edit), app-only update file. See [SCOOBY_DECK.md](SCOOBY_DECK.md) for the source layout and the per-version change notes.
 
 ## License and credits
 GPL-3.0-or-later; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Under the GPL, anyone who

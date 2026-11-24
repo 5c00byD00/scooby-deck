@@ -3,6 +3,7 @@
 #include "DualMeshConfig.h"
 #include "lora_meshtastic.h"
 #include "lora_crypto.h"
+#include "DualMeshStore.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -69,17 +70,35 @@ void resetDefaults() {
     s_cfg.ch[0].enabled = 1;
 }
 
+// v1.2.0: the settings live in /dm_cfg.bin on SPIFFS (see DualMeshStore.h),
+// which a full 0x0 reflash does not touch. Load order: the file; else the old
+// NVS blob (migrated to the file once); else defaults (Mt::begin then makes a
+// new PKI key and saves it).
+static bool s_fileOk = false;   // the current settings are in the file
+static bool s_noStoreAtLoad = false;   // SPIFFS was not mounted when load() ran
+
+static bool valid(const Config& t) { return t.version == CFG_VERSION; }
+
 void load() {
     resetDefaults();
+    Config tmp;
+    const char* from = "defaults";
+    s_noStoreAtLoad = !Store::ready();
+    if (Store::get("cfg", &tmp, sizeof tmp) == (long)sizeof tmp && valid(tmp)) {
+        s_cfg = tmp; s_fileOk = true; from = "SPIFFS /dm_cfg.bin";
+    }
 #if defined(ESP32)
-    Preferences p;
-    if (p.begin("dualmesh", true)) {
-        Config tmp;
-        const size_t n = p.getBytes("cfg", &tmp, sizeof tmp);
-        if (n == sizeof tmp && tmp.version == CFG_VERSION) s_cfg = tmp;
-        p.end();
+    else {
+        Preferences p;
+        if (p.begin("dualmesh", true)) {
+            const size_t n = p.getBytes("cfg", &tmp, sizeof tmp);
+            if (n == sizeof tmp && valid(tmp)) { s_cfg = tmp; from = "NVS (migrating to SPIFFS)"; }
+            p.end();
+        }
+        if (strcmp(from, "defaults") != 0) s_fileOk = Store::put("cfg", &s_cfg, sizeof s_cfg);
     }
 #endif
+    Serial.printf("[dm-cfg] settings from %s, PKI key %s\n", from, s_cfg.mt_priv_set ? "kept" : "not set yet");
     s_cfg.long_name[sizeof s_cfg.long_name - 1] = 0;
     s_cfg.short_name[sizeof s_cfg.short_name - 1] = 0;
     if (s_cfg.mode > MODE_MESHTASTIC) s_cfg.mode = MODE_DUAL;
@@ -88,15 +107,34 @@ void load() {
 }
 
 void save() {
+    s_fileOk = Store::put("cfg", &s_cfg, sizeof s_cfg);
 #if defined(ESP32)
-    Preferences p;
-    if (p.begin("dualmesh", false)) {
-        p.putBytes("cfg", &s_cfg, sizeof s_cfg);
-        p.end();
+    // NVS only as a fallback when SPIFFS could not take it (a reflash wipes NVS,
+    // and the 20 KB partition is shared with WadaMesh's boot counters).
+    if (!s_fileOk) {
+        Preferences p;
+        if (p.begin("dualmesh", false)) { p.putBytes("cfg", &s_cfg, sizeof s_cfg); p.end(); }
     }
 #endif
     applyChannels();
     s_changes++;
+}
+
+// From Mt::poll: settings that could only go to NVS (SPIFFS not mounted yet at
+// the time) are written to the file once it is.
+void storeRetry() {
+    if (s_fileOk || !Store::ready()) return;
+    if (s_noStoreAtLoad) {
+        // Never overwrite a good file we simply could not read at boot.
+        Config tmp;
+        s_noStoreAtLoad = false;
+        if (Store::get("cfg", &tmp, sizeof tmp) == (long)sizeof tmp && valid(tmp)) {
+            Serial.println("[dm-cfg] SPIFFS mounted late: kept /dm_cfg.bin (restart to use it)");
+            s_fileOk = true;
+            return;
+        }
+    }
+    s_fileOk = Store::put("cfg", &s_cfg, sizeof s_cfg);
 }
 
 const char* mtPresetName() {
