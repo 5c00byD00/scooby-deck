@@ -12,7 +12,8 @@ struct Palette { uint32_t bg, ink, dim, hi, warn; const char* name; };
 const Palette& pal();
 uint8_t schemeCount();
 extern const lv_font_t* const FONT_S;   // unscii 8  (status dump)
-extern const lv_font_t* const FONT_M;   // unscii 16 (everything else)
+extern const lv_font_t* const FONT_M;   // unscii-16, 8x16 (everything else)
+extern const lv_font_t* const FONT_L;   // unscii-16 doubled, 16x32: digits only (charging screen)
 
 // ---------------------------------------------------------------- UI preferences (/dm_ui3.bin)
 struct UiPrefs {
@@ -24,8 +25,13 @@ struct UiPrefs {
   uint8_t  names_done;   // first-boot name setup finished
   uint8_t  scheme;       // colour scheme (green only for now)
   uint8_t  mc_preset;    // last MeshCore NA preset picked (0xFF custom)
-  uint8_t  reserved[7];
+  uint8_t  clock24;      // v2: 1 = 24 h clock, 0 = 12 h
+  int8_t   tz_q;         // v2: UTC offset in quarter hours (-20 = UTC-5)
+  uint8_t  pad;
+  uint16_t batt_full_mv; // v2: battery reading at full charge (0 = not calibrated)
+  uint8_t  reserved[2];
 };
+static_assert(sizeof(UiPrefs) == 16, "UiPrefs layout");
 UiPrefs& prefs();
 void     loadPrefs();
 void     savePrefs();
@@ -34,8 +40,10 @@ void     savePrefs();
 void     halSetBrightness(uint8_t pct);
 void     halSetKbBacklight(uint8_t v);
 void     halSleepNow(bool lock);       // screen + keyboard light off now
-uint16_t battMv();
-uint8_t  battPct();
+uint16_t battMv();                     // as read (5 s cache)
+uint8_t  battPct();                    // calibrated when SETUP > BATTERY was reset at full charge
+bool     battCalibrate(uint16_t* mvOut);   // store the current reading as 100 %; false if not near full
+void     halChargingMode(bool on);     // charging screen: 30 % backlight, no screen sleep
 bool     sdBegin();                    // SD card mounted (lazily)
 
 // ---------------------------------------------------------------- pages
@@ -44,6 +52,7 @@ enum Page : uint8_t {
   P_CORE, P_CORE_DMS, P_CORE_EDIT, P_CORE_CHAT, P_CORE_HEARD,
   P_TASTIC, P_MT_DMS, P_MT_EDIT, P_MT_CHAT, P_MT_HEARD,
   P_SETUP, P_SET_NAME, P_SET_MT, P_SET_MC, P_SET_DISPLAY,
+  P_SET_BATTERY, P_CHARGING, P_SET_TIME,
   P_COUNT
 };
 struct Ctx {
@@ -74,6 +83,7 @@ lv_obj_t* frame(const char* title, bool backArrow);    // clean screen + header;
 lv_obj_t* body();                                       // body of the current frame
 lv_obj_t* headerRight();                                // clock / battery label
 void      setTitle(const char* title);                  // replace the header title (keeps the < arrow)
+void      setHeaderText(const char* text);              // replace the whole header title text
 lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h);
 lv_obj_t* label(lv_obj_t* parent, const char* text, const lv_font_t* f = nullptr, uint32_t color = 0xFFFFFFFF);
 lv_obj_t* button(lv_obj_t* parent, const char* text, int x, int y, int w, int h, lv_event_cb_t cb, void* ud = nullptr);
@@ -100,6 +110,12 @@ void buildMtChat(lv_obj_t* b);    void buildMtHeard(lv_obj_t* b);
 uint32_t meshSignature(Page p);   // changes when the page's data changed
 void buildSetup(lv_obj_t* b);     void buildSetName(lv_obj_t* b);  void buildSetMt(lv_obj_t* b);
 void buildSetMc(lv_obj_t* b);     void buildSetDisplay(lv_obj_t* b);
+void buildSetBattery(lv_obj_t* b); void buildCharging(lv_obj_t* b); void refreshCharging(uint32_t now);
+void buildSetTime(lv_obj_t* b);
+
+// MeshCore advert: popup asking FLOOD or LOCAL (zero hop), then sends it (PagesMesh.cpp)
+void advertPopup();
+bool mcAdvert(bool flood);
 
 // names (PagesSetup.cpp)
 void defaultNames(char* longOut, size_t lcap, char* shortOut, size_t scap);

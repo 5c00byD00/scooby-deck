@@ -43,7 +43,9 @@ CREDITS / THIRD-PARTY CODE
 5. Meshtastic protocol (https://meshtastic.org), GPL-3.0. The on-air format is
    implemented from scratch in app/dualmesh (no Meshtastic firmware code).
 
-6. LVGL 9.3 (MIT), incl. the UNSCII 8/16 fonts by Viznut (public domain);
+6. LVGL 9.3 (MIT), incl. its UNSCII 8 font; app/fonts/ holds unscii-16 (8x16, and the same
+   at 2x for digits) converted with lv_font_conv from https://github.com/viznut/unscii
+   (unscii by Viznut, public domain);
    RadioLib (MIT); rweather Crypto (MIT); Adafruit GFX/ST7789 (BSD);
    arduino-esp32 (LGPL-2.1); see Faro's NOTICE for the full list of the
    libraries MeshCore pulls in.

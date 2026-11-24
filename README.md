@@ -19,12 +19,12 @@ git clone --recursive -b v3 https://github.com/5c00byD00/scooby-deck.git
 cd scooby-deck
 scripts/link_env.sh
 pio run -d external/MeshCore -e scooby_tdeck -t mergebin
-# external/MeshCore/.pio/build/scooby_tdeck/firmware-merged.bin  -> flash at 0x0
-# external/MeshCore/.pio/build/scooby_tdeck/firmware.bin         -> flash at 0x10000
+# external/MeshCore/.pio/build/scooby_tdeck/firmware-merged.bin  -> erase, then flash at 0x0
 ```
 
 Every push to `v3` refreshes the rolling **`nightly-v3`** pre-release
-(`.github/workflows/nightly-v3.yml`). It is never marked Latest.
+(`.github/workflows/nightly-v3.yml`). It is never marked Latest and carries only the merged
+image: each nightly is meant as a fresh wipe-and-flash (erase, then write at 0x0).
 
 ## Layout
 
@@ -36,12 +36,13 @@ Every push to `v3` refreshes the rolling **`nightly-v3`** pre-release
 | `app/hal` | Faro's hardware drivers |
 | `app/dualmesh` | Meshtastic stack, dual-mesh radio, settings store |
 | `app/ui` | terminal UI (LVGL 9.3, unscii fonts, green on black) |
+| `app/fonts` | unscii-16 (8x16) and its 2x digits, made with lv_font_conv |
 
 ## Keys
 
 Not typing: **C** = CORE, **T** = TASTIC, **P** = SETUP, **H** = HOME, **B** / Backspace = back,
 **Space** = sleep + lock. Trackball: roll to move, click to select, hold = back.
-Lock screen: hold the trackball 3 s.
+Lock screen: hold the trackball 3 s. Charging screen (SETUP > BATTERY): click the trackball to leave.
 
 ## Licence
 

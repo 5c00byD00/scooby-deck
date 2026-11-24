@@ -12,6 +12,10 @@
 #include "DualMeshConfig.h"
 #include "DualMeshMt.h"
 #include "ScoobyVersion.h"
+#include "Clock.h"
+#include "McStore.h"
+#include <DataStore.h>
+extern DataStore store;
 
 namespace sd {
 
@@ -139,6 +143,12 @@ void buildSetup(lv_obj_t* b) {
   row(l, "4 MESHCORE", r, [](lv_event_t*) { go(P_SET_MC); });
   snprintf(r, sizeof r, "%u%%%s >", prefs().brightness, prefs().lock_on ? " LOCK" : "");
   row(l, "5 DISPLAY", r, [](lv_event_t*) { go(P_SET_DISPLAY); });
+  snprintf(r, sizeof r, "%u%% %u.%02uV >", battPct(), battMv() / 1000, battMv() % 1000 / 10);
+  row(l, "6 BATTERY", r, [](lv_event_t*) { go(P_SET_BATTERY); });
+  char c[12];
+  clockHeader(c, sizeof c);
+  snprintf(r, sizeof r, "%s %s >", c, prefs().clock24 ? "24H" : "12H");
+  row(l, "7 TIME", r, [](lv_event_t*) { go(P_SET_TIME); });
   lv_obj_t* help = label(l, "LISTENING TO cycles MESHTASTIC >\nMESHCORE > BOTH (BOTH = time-sliced\non one radio).", FONT_S, pal().dim);
   lv_obj_set_width(help, lv_pct(100));
   lv_obj_t* foot = label(b, "tap: cycle / open    B: home", FONT_S, pal().dim);
@@ -257,6 +267,18 @@ static void mtHopsCb(lv_event_t*) {
   save();
   go(P_SET_MT);
 }
+static void mtClearYes(void*) {
+  int n = 0;
+  Mt::Node nd;
+  for (int guard = 0; guard < 512 && Mt::nodeCount() && Mt::nodeAt(0, nd); guard++) {
+    if (!Mt::deleteNode(nd.num)) break;
+    n++;
+  }
+  char t[40];
+  snprintf(t, sizeof t, "Cleared %d node%s", n, n == 1 ? "" : "s");
+  toast(t);
+  go(P_SET_MT);
+}
 void buildSetMt(lv_obj_t* b) {
   lv_obj_t* l = list(b, 0, 0, 320, 218);
   const Config& c = cfg();
@@ -282,6 +304,10 @@ void buildSetMt(lv_obj_t* b) {
     confirm("Replace the key with /scooby_mt_key.txt from the SD card?", "[ RESTORE ]", keyRestoreYes); });
   row(l, "GENERATE NEW", ">", [](lv_event_t*) {
     confirm("Make a new key? Back up first: old DMs to you can't be read with the new one.", "[ NEW KEY ]", keyNewYes); });
+  section(l, "NODES");
+  snprintf(r, sizeof r, "%u nodes >", Mt::nodeCount());
+  row(l, "CLEAR LAST HEARD", r, [](lv_event_t*) {
+    confirm("Clear Meshtastic last heard? Nodes return when heard again.", "[ CLEAR ]", mtClearYes); });
   lv_group_focus_obj(first);
 }
 
@@ -338,7 +364,30 @@ static void mcTxCb(lv_event_t*) {
   radio_driver.setTxPower(np->tx_power_dbm);
   go(P_SET_MC);
 }
-static void mcAdvertCb(lv_event_t*) { toast(the_mesh.advert() ? "Advert sent" : "Advert failed"); }
+static void mcAdvertCb(lv_event_t*) { advertPopup(); }
+// Clear last heard = remove the MeshCore contacts, except favourites and anyone with a DM
+// thread (they hold the key a reply needs). Contacts come back with their next advert.
+static void mcClearYes(void*) {
+  static uint8_t keys[MAX_CONTACTS][PUB_KEY_SIZE];
+  int nk = 0;
+  ContactsIterator it = the_mesh.startContactsIterator();
+  ContactInfo c;
+  while (nk < MAX_CONTACTS && it.hasNext(&the_mesh, c)) {
+    if (c.flags & 0x01) continue;                       // favourite
+    if (mc::hasDm(c.id.pub_key)) continue;
+    memcpy(keys[nk++], c.id.pub_key, PUB_KEY_SIZE);
+  }
+  int n = 0;
+  for (int i = 0; i < nk; i++) {
+    ContactInfo* p = the_mesh.lookupContactByPubKey(keys[i], PUB_KEY_SIZE);
+    if (p && the_mesh.removeContact(*p)) n++;
+  }
+  if (n) store.saveContacts(&the_mesh);
+  char t[48];
+  snprintf(t, sizeof t, "Cleared %d contact%s", n, n == 1 ? "" : "s");
+  toast(t);
+  go(P_SET_MC);
+}
 void buildSetMc(lv_obj_t* b) {
   lv_obj_t* l = list(b, 0, 0, 320, 218);
   const NodePrefs* np = the_mesh.getNodePrefs();
@@ -358,7 +407,10 @@ void buildSetMc(lv_obj_t* b) {
   row(l, "TX POWER", r, mcTxCb);
   section(l, "NODE");
   row(l, "NAME", np->node_name, nullptr);
-  row(l, "SEND ADVERT", ">", mcAdvertCb);
+  row(l, "SEND ADVERT", "FLOOD / LOCAL >", mcAdvertCb);
+  snprintf(r, sizeof r, "%d contacts >", the_mesh.getNumContacts());
+  row(l, "CLEAR LAST HEARD", r, [](lv_event_t*) {
+    confirm("Clear MeshCore last heard? Favourites and DM partners stay.", "[ CLEAR ]", mcClearYes); });
   lv_obj_t* h = label(l, "Editing FREQ/BW/SF/CR makes it CUSTOM.\nThe SF here is MeshCore's own; TASTIC\nhas its own SF override.", FONT_S, pal().dim);
   lv_obj_set_width(h, lv_pct(100));
   lv_group_focus_obj(first);

@@ -8,7 +8,8 @@ name: nightly-v3
 # Build (same as local):
 #   scripts/link_env.sh && pio run -d external/MeshCore -e scooby_tdeck -t mergebin
 # Upstream MeshCore's merge-bin.py runs esptool merge_bin: bootloader 0x0, partitions 0x8000
-# (default_16MB.csv), boot_app0 0xE000, app 0x10000.
+# (default_16MB.csv), boot_app0 0xE000, app 0x10000. Only that merged image is published:
+# every nightly is meant as a fresh wipe-and-flash at 0x0.
 
 on:
   push:
@@ -68,11 +69,9 @@ jobs:
           B=external/MeshCore/.pio/build/$PIO_ENV
           mkdir -p upload
           cp "$B/firmware-merged.bin" "upload/$PREFIX-merged.bin"
-          cp "$B/firmware.bin"        "upload/$PREFIX-app.bin"
           M_SHA=$(sha256sum "upload/$PREFIX-merged.bin" | cut -d' ' -f1)
-          A_SHA=$(sha256sum "upload/$PREFIX-app.bin"    | cut -d' ' -f1)
           M_SIZE=$(stat -c %s "upload/$PREFIX-merged.bin")
-          A_SIZE=$(stat -c %s "upload/$PREFIX-app.bin")
+          A_SIZE=$(stat -c %s "$B/firmware.bin")
           FLASH=$(grep -m1 '^Flash:' build.log || true)
           SUBJ=$(git log -1 --format=%s)
           DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -85,18 +84,19 @@ jobs:
             echo
             echo "**Built:** $DATE (version string \`${VER:-unknown}\`, build ${BUILD_SECS}s, [run](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))"
             echo
-            echo "**Size:** app $A_SIZE bytes. \`$FLASH\`"
+            echo "> [!IMPORTANT]"
+            echo "> **Every nightly is a fresh wipe-and-flash.** Erase the flash and write the merged image at 0x0; settings, contacts and keys from an earlier build are not kept (back up the Meshtastic key to SD first: SETUP > MESHTASTIC > BACK UP TO SD). There is no app-only update bin."
+            echo
+            echo "**Size:** app $A_SIZE bytes, merged image $M_SIZE bytes. \`$FLASH\`"
             echo
             echo "| File | Flash at | Size | SHA-256 |"
             echo "|---|---|---|---|"
-            echo "| \`$PREFIX-merged.bin\` | 0x0 (full image: new boards / recovery) | $M_SIZE | \`$M_SHA\` |"
-            echo "| \`$PREFIX-app.bin\` | 0x10000 (app-only update) | $A_SIZE | \`$A_SHA\` |"
+            echo "| \`$PREFIX-merged.bin\` | 0x0 (full image: bootloader, partitions, app) | $M_SIZE | \`$M_SHA\` |"
             echo
-            echo "Example: \`esptool.py --chip esp32s3 write_flash 0x0 $PREFIX-merged.bin\` or \`... write_flash 0x10000 $PREFIX-app.bin\`."
+            echo "Flash: \`esptool.py --chip esp32s3 erase_flash\` then \`esptool.py --chip esp32s3 write_flash 0x0 $PREFIX-merged.bin\` (or a web flasher with \"erase\" ticked)."
           } > notes.md
           cat notes.md
           echo "m_sha=$M_SHA" >> "$GITHUB_OUTPUT"
-          echo "a_sha=$A_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Move the nightly-v3 tag to this commit
         run: |
@@ -111,18 +111,25 @@ jobs:
             gh release edit "$TAG" --prerelease --latest=false \
               --title "Scooby Deck nightly v3 (rolling)" --notes-file notes.md
             gh release upload "$TAG" upload/*.bin --clobber
+            # merged image only: drop the app-only bin older nightlies published
+            gh release delete-asset "$TAG" "$PREFIX-app.bin" -y 2>/dev/null || true
           else
             gh release create "$TAG" --verify-tag --prerelease --latest=false \
               --title "Scooby Deck nightly v3 (rolling)" --notes-file notes.md upload/*.bin
           fi
 
       - name: Verify downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           sleep 5
-          for f in merged:${{ steps.meta.outputs.m_sha }} app:${{ steps.meta.outputs.a_sha }}; do
+          for f in merged:${{ steps.meta.outputs.m_sha }}; do
             kind=${f%%:*}; want=${f#*:}
             got=$(curl -fsSL "$base/$PREFIX-$kind.bin" | sha256sum | cut -d' ' -f1)
             echo "$kind: $got"
             [ "$got" = "$want" ] || { echo "SHA mismatch for $kind"; exit 1; }
           done
+          if gh release view "$TAG" --json assets -q '.assets[].name' | grep -qv -- '-merged.bin$'; then
+            echo "unexpected extra assets on $TAG"; exit 1
+          fi

@@ -47,6 +47,7 @@ uint16_t unreadTotal();
 uint16_t channelCount(uint8_t chan);
 void     markChannelRead(uint8_t chan);
 void     markDmRead(const uint8_t* prefix6);
+bool     hasDm(const uint8_t* prefix6);               // any DM with this peer stored
 void     deleteDm(const uint8_t* prefix6);
 void     dropChannel(uint8_t chan);                  // channel removed
 uint32_t ackRx();                                    // ACKs matched

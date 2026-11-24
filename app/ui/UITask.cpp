@@ -15,6 +15,7 @@
 #include <target.h>
 #include "Ui.h"
 #include "McStore.h"
+#include "Clock.h"
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
@@ -29,6 +30,7 @@ struct Dev {
   uint16_t buf1[320 * 24];
   uint32_t lastMs = 0, lastInput = 0, lastSleepPoll = 0;
   bool off = false;
+  bool charging = false;   // SETUP > BATTERY > CHARGING SCREEN is up
   uint32_t kbKey = 0; bool kbPressed = false;
   bool encPressed = false;
   bool sdMounted = false; uint32_t sdFailMs = 0;
@@ -43,7 +45,7 @@ bool wake() {
   if (!g->off) return false;
   g->off = false;
   if (g->display) {
-    g->display->setBacklight(sd::prefs().brightness);
+    g->display->setBacklight(g->charging ? 30 : sd::prefs().brightness);
     g->display->turnOn();
   }
   g->keyboard.setBacklight(sd::prefs().kb_bl);
@@ -87,6 +89,10 @@ void readTrackball(lv_indev_t*, lv_indev_data_t* d) {
   }
   if (!(dx || dy || clicked || longPressed)) return;
   if (wake()) return;
+  if (sd::page() == sd::P_CHARGING) {   // "Tap the trackball to exit"; rolling does nothing
+    if (clicked || longPressed) sd::back();
+    return;
+  }
   if (longPressed) { sd::back(); return; }
   d->enc_diff = (int16_t)(dy + dx);
   if (clicked) { d->state = LV_INDEV_STATE_PRESSED; g->encPressed = true; }
@@ -122,9 +128,33 @@ static void battRead() {
   if (g->mv && now - g->battMs < 5000) return;
   g->battMs = now;
   g->mv = g->power.readBattMilliVolts();
-  g->pct = g->power.readBattPercent(g->mv);
+  // The T-Deck Plus has no fuel gauge: the level comes from the voltage alone. A calibration
+  // (SETUP > BATTERY > RESET LEVEL COUNTER at full charge) scales the reading so that the
+  // voltage seen at full charge counts as 4.20 V, i.e. 100 %; this takes out the divider /
+  // ADC gain error of this board.
+  uint32_t mv = g->mv;
+  const uint16_t full = sd::prefs().batt_full_mv;
+  if (full >= 3800 && full <= 4500) mv = mv * 4200u / full;
+  g->pct = g->power.readBattPercent((uint16_t)(mv > 65000 ? 65000 : mv));
 }
 uint16_t battMv() { battRead(); return g ? g->mv : 0; }
+bool battCalibrate(uint16_t* mvOut) {
+  if (!g) return false;
+  // PowerBoard's reading is already an average of a DMA burst (cached up to 2 s)
+  const uint16_t mv = g->power.readBattMilliVolts();
+  if (mvOut) *mvOut = mv;
+  if (mv < 3800 || mv > 4500) return false;   // not near full (or no battery): keep the old value
+  prefs().batt_full_mv = mv;
+  savePrefs();
+  g->mv = 0;   // next read recomputes the %
+  return true;
+}
+void halChargingMode(bool on) {
+  if (!g) return;
+  g->charging = on;
+  g->lastInput = millis();
+  if (g->display && !g->off) g->display->setBacklight(on ? 30 : prefs().brightness);
+}
 uint8_t battPct() { battRead(); return g ? g->pct : 0; }
 bool sdBegin() {
   if (!g) return false;
@@ -153,6 +183,7 @@ void UITask::begin(DisplayDriver* display, SensorManager*, NodePrefs*) {
   g->keyboard.begin();
   g->trackball.begin();
   mc::begin();
+  sd::clockBegin();
 
   lv_init();
   lv_display_t* disp = lv_display_create(320, 240);
@@ -195,10 +226,11 @@ void UITask::loop() {
   lv_tick_inc(now - g->lastMs);
   g->lastMs = now;
   mc::loop(now);
+  sd::clockTick(now);
   sd::tick(now);
 
   const uint32_t sleepMs = (uint32_t)sd::prefs().sleep_s * 1000u;
-  if (!g->off && sleepMs && now - g->lastInput > sleepMs && sd::page() != sd::P_BOOT) screenOff(false);
+  if (!g->off && sleepMs && !g->charging && now - g->lastInput > sleepMs && sd::page() != sd::P_BOOT) screenOff(false);
 
   if (g->off) {
     // panel asleep: no redraws, but keep polling the inputs that wake it

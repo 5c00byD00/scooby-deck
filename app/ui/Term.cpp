@@ -6,6 +6,10 @@
 #include "Ui.h"
 #include "DualMeshStore.h"
 #include "ScoobyVersion.h"
+#include "Clock.h"
+
+LV_FONT_DECLARE(sd_font_term16);
+LV_FONT_DECLARE(sd_font_term32);
 
 namespace sd {
 
@@ -16,7 +20,8 @@ static const Palette kSchemes[] = {
 uint8_t schemeCount() { return sizeof kSchemes / sizeof kSchemes[0]; }
 const Palette& pal() { return kSchemes[prefs().scheme < schemeCount() ? prefs().scheme : 0]; }
 const lv_font_t* const FONT_S = &lv_font_unscii_8;
-const lv_font_t* const FONT_M = &lv_font_unscii_16;
+const lv_font_t* const FONT_M = &sd_font_term16;   // 8x16: 40 columns, v2 used 8x8, v3.0 16x16
+const lv_font_t* const FONT_L = &sd_font_term32;
 
 // ============================================================== prefs
 static UiPrefs s_prefs;
@@ -25,11 +30,15 @@ void loadPrefs() {
   UiPrefs p;
   memset(&p, 0, sizeof p);
   const long n = DualMesh::Store::get("ui3", &p, sizeof p);
-  if (n < 8 || p.version != 1) {
+  if (n >= 8 && p.version == 1) {   // v3 nightly before the clock / battery settings
+    p.version = 2; p.clock24 = 0; p.tz_q = -20; p.pad = 0; p.batt_full_mv = 0;
+  } else if (n < 8 || p.version != 2) {
     memset(&p, 0, sizeof p);
-    p.version = 1; p.brightness = 70; p.sleep_s = 60; p.kb_bl = 127; p.lock_on = 0;
+    p.version = 2; p.brightness = 70; p.sleep_s = 60; p.kb_bl = 127; p.lock_on = 0;
     p.names_done = 0; p.scheme = 0; p.mc_preset = 0;
+    p.clock24 = 0; p.tz_q = -20;     // 12 h, UTC-5 (US Eastern standard time)
   }
+  if (p.tz_q < -48 || p.tz_q > 56) p.tz_q = 0;
   if (p.brightness < 10) p.brightness = 10;
   if (p.brightness > 100) p.brightness = 100;
   s_prefs = p;
@@ -68,6 +77,9 @@ static const PageDef kPages[P_COUNT] = {
   /* P_SET_MT      */ { "SETUP  MESHTASTIC",  buildSetMt,   P_SETUP, false },
   /* P_SET_MC      */ { "SETUP  MESHCORE",    buildSetMc,   P_SETUP, false },
   /* P_SET_DISPLAY */ { "SETUP  DISPLAY",     buildSetDisplay, P_SETUP, false },
+  /* P_SET_BATTERY */ { "SETUP  BATTERY",     buildSetBattery, P_SETUP, false },
+  /* P_CHARGING    */ { nullptr,              buildCharging,   P_SET_BATTERY, false },
+  /* P_SET_TIME    */ { "SETUP  TIME",        buildSetTime,    P_SETUP, false },
 };
 
 lv_group_t* group() { return s_group; }
@@ -86,6 +98,7 @@ void setTitle(const char* title) {
   snprintf(t, sizeof t, "< %s", title);
   lv_label_set_text(s_hdrTitle, t);
 }
+void setHeaderText(const char* text) { if (s_hdrTitle) lv_label_set_text(s_hdrTitle, text); }
 void noteActivity() { s_lastActivity = millis(); }
 
 bool typing() {
@@ -178,7 +191,7 @@ lv_obj_t* section(lv_obj_t* lst, const char* title) {
 lv_obj_t* row(lv_obj_t* lst, const char* left, const char* right, lv_event_cb_t cb, void* ud, bool hot) {
   lv_obj_t* r = lv_obj_create(lst);
   baseStyle(r);
-  lv_obj_set_size(r, lv_pct(100), 20);
+  lv_obj_set_size(r, lv_pct(100), 18);
   lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
   lv_obj_set_style_pad_hor(r, 2, 0);
   lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
@@ -243,6 +256,7 @@ void ageText(uint32_t s, char* out, size_t cap) {
 
 // ============================================================== frame / header
 static void backCb(lv_event_t*) { back(); }
+static const int kHdrRightW = 13 * 8;   // "~12:34PM 100%"
 
 lv_obj_t* frame(const char* title, bool backArrow) {
   lv_obj_t* scr = lv_screen_active();
@@ -264,7 +278,13 @@ lv_obj_t* frame(const char* title, bool backArrow) {
     lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
     char t[48];
     snprintf(t, sizeof t, "%s%s", backArrow ? "< " : "> ", title);
+    // right: clock + battery ("12:34PM 87%" = 11 columns); the title gets the rest and is
+    // clipped instead of running under it
+    s_hdrRight = label(hdr, "", FONT_M);
+    lv_obj_align(s_hdrRight, LV_ALIGN_RIGHT_MID, -2, 0);
     lv_obj_t* l = label(hdr, t);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(l, 320 - 4 - kHdrRightW - 8);
     lv_obj_align(l, LV_ALIGN_LEFT_MID, 2, 0);
     s_hdrTitle = l;
     if (backArrow) {
@@ -272,8 +292,6 @@ lv_obj_t* frame(const char* title, bool backArrow) {
       lv_obj_set_ext_click_area(l, 8);
       lv_obj_add_event_cb(l, backCb, LV_EVENT_CLICKED, nullptr);
     }
-    s_hdrRight = label(hdr, "", FONT_S);
-    lv_obj_align(s_hdrRight, LV_ALIGN_RIGHT_MID, -2, 0);
     top = 22;
   }
   lv_obj_t* b = lv_obj_create(scr);
@@ -287,10 +305,11 @@ lv_obj_t* frame(const char* title, bool backArrow) {
 
 static void updateHeaderRight() {
   if (!s_hdrRight) return;
-  char b[24];
-  const uint32_t up = millis() / 1000;
-  snprintf(b, sizeof b, "%02u:%02u  %u%%", (unsigned)(up / 3600 % 100), (unsigned)(up / 60 % 60), (unsigned)battPct());
+  char c[12], b[24];
+  clockHeader(c, sizeof c);
+  snprintf(b, sizeof b, "%s %u%%", c, (unsigned)battPct());
   lv_label_set_text(s_hdrRight, b);
+  lv_obj_align(s_hdrRight, LV_ALIGN_RIGHT_MID, -2, 0);
 }
 
 // ============================================================== toast
@@ -428,6 +447,10 @@ bool handleKey(uint32_t key) {
   if (typing()) return false;
   if (key >= 'A' && key <= 'Z') key += 32;
   if (s_page == P_BOOT || s_page == P_NAMES_FIRST) return false;
+  if (s_page == P_CHARGING) {   // only the trackball (or B / Esc) leaves; everything else is ignored
+    if (key == 'b' || key == 0x08 || key == 0x1B) back();
+    return true;
+  }
   if (popupOpen()) {
     if (key == 'b' || key == 0x08 || key == 0x1B) { popupClose(); return true; }
     return false;
@@ -482,8 +505,11 @@ void tick(uint32_t now) {
       const bool same = (p == s_page);
       const int keep = (same && p != P_CORE_CHAT && p != P_MT_CHAT) ? s_focusIdx : -1;
       if (s_popup) { lv_obj_delete(s_popup); s_popup = nullptr; }
+      if (s_page == P_CHARGING && p != P_CHARGING) halChargingMode(false);   // brightness + sleep back
+      if (p == P_CHARGING && s_page != P_CHARGING) halChargingMode(true);
       s_page = p;
-      lv_obj_t* b = frame(kPages[p].title, p != P_HOME && p != P_BOOT && p != P_NAMES_FIRST);
+      lv_obj_t* b = frame(p == P_HOME ? "SCOOBY DECK" : kPages[p].title,
+                          p != P_HOME && p != P_BOOT && p != P_NAMES_FIRST);
       kPages[p].build(b);
       if (keep > 0 && (uint32_t)keep < lv_group_get_obj_count(group())) {
         lv_obj_t* o = lv_group_get_obj_by_index(group(), keep);
@@ -507,6 +533,7 @@ void tick(uint32_t now) {
     updateHeaderRight();
     if (s_page == P_HOME) refreshHome(now);
     else if (s_page == P_BOOT) refreshBoot(now);
+    else if (s_page == P_CHARGING) refreshCharging(now);
     else if (kPages[s_page].mesh && !popupOpen() && !locked()) {
       // rebuild a mesh page when its data changed, unless the user is typing a message
       const uint32_t sig = meshSignature(s_page);

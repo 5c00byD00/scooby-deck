@@ -87,7 +87,7 @@
 #define LV_FONT_MONTSERRAT_22   0
 #define LV_FONT_MONTSERRAT_24   0
 #define LV_FONT_UNSCII_8        1
-#define LV_FONT_UNSCII_16       1
+#define LV_FONT_UNSCII_16       0   // v3: own 8x16 unscii-16 (app/fonts)
 #define LV_FONT_DEFAULT         &lv_font_unscii_8
 #define LV_FONT_FMT_TXT_LARGE   0
 #define LV_USE_FONT_COMPRESSED  0

@@ -173,6 +173,10 @@ static void dropIf(bool (*pred)(const Msg&, const void*), const void* arg) {
   s_count = w;
   s_seq++;
 }
+bool hasDm(const uint8_t* p6) {
+  for (uint16_t i = 0; i < s_count; i++) { const Msg* m = at(i); if (peerIs(*m, p6)) return true; }
+  return false;
+}
 void deleteDm(const uint8_t* p6) {
   dropIf([](const Msg& m, const void* a) { return peerIs(m, (const uint8_t*)a); }, p6);
 }

@@ -31,7 +31,6 @@ void refreshBoot(uint32_t now) {
 }
 
 // ------------------------------------------------------------------ home
-static lv_obj_t* s_hdr = nullptr;
 static lv_obj_t* s_stat = nullptr;
 
 static void coreCb(lv_event_t*)   { go(P_CORE); }
@@ -71,6 +70,7 @@ void refreshHome(uint32_t) {
   const uint16_t mv = battMv();
   const uint8_t pct = battPct();
   bar(b1, 10, pct);
+  add("[VER  ] v%s\n", SCOOBY_DECK_VERSION);
   add("[BATT ] %3u%%  %u.%02uV %s\n", pct, mv / 1000, (mv % 1000) / 10, b1);
   add("[MSGS ] CORE %u   TASTIC %u  (unread)\n", mc::unreadTotal(), DualMesh::Mt::unreadTotal());
   const DualMesh::Config& c = DualMesh::cfg();
@@ -95,20 +95,18 @@ void refreshHome(uint32_t) {
   add("[ACK  ] CORE %lu  TASTIC %lu", (unsigned long)mc::ackRx(), (unsigned long)dg.ackRx);
   lv_label_set_text(s_stat, buf);
   char h[48];
-  snprintf(h, sizeof h, "> SCOOBY DECK v%s [%s]", SCOOBY_DECK_VERSION, modeShort(c.mode));
-  lv_label_set_text(s_hdr, h);
+  snprintf(h, sizeof h, "> SCOOBY DECK [%s]", modeShort(c.mode));
+  setHeaderText(h);
 }
 
 void buildHome(lv_obj_t* b) {
-  s_hdr = label(b, "", FONT_M);
-  lv_obj_set_pos(s_hdr, 2, 2);
-  lv_obj_t* bx = box(b, 0, 20, 320, 182);
+  lv_obj_t* bx = box(b, 0, 0, 320, 180);
   s_stat = label(bx, "", FONT_S);
   lv_obj_set_width(s_stat, 312);
   lv_obj_set_style_text_line_space(s_stat, 2, 0);
-  lv_obj_t* core = button(b, "[ CORE ]", 0, 206, 104, 34, coreCb);
-  button(b, "[ SETUP ]", 108, 206, 104, 34, setupCb);
-  button(b, "[ TASTIC ]", 216, 206, 104, 34, tasticCb);
+  lv_obj_t* core = button(b, "[ CORE ]", 0, 184, 104, 34, coreCb);
+  button(b, "[ SETUP ]", 108, 184, 104, 34, setupCb);
+  button(b, "[ TASTIC ]", 216, 184, 104, 34, tasticCb);
   lv_group_focus_obj(core);
   refreshHome(millis());
 }

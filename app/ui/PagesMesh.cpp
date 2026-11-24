@@ -7,6 +7,7 @@
 #include <MyMesh.h>
 #include <DataStore.h>
 #include <helpers/AdvertDataHelpers.h>
+#include <helpers/TransportKeyStore.h>
 // base64.hpp (densaugeo) is header-only and already compiled into BaseChatMesh.cpp
 unsigned int decode_base64(const unsigned char input[], unsigned int input_length, unsigned char output[]);
 #include "Ui.h"
@@ -138,9 +139,42 @@ void buildCore(lv_obj_t* b) {
   }
   char dm[24];
   snprintf(dm, sizeof dm, "[ DMs (%u) ]", mc::unreadDm(nullptr));
-  lv_obj_t* f = button(b, dm, 0, kBtnY, 158, kBtnH, coreDmsCb);
-  button(b, "[ EDIT ]", 162, kBtnY, 158, kBtnH, coreEditCb);
-  (void)f;
+  button(b, dm, 0, kBtnY, 104, kBtnH, coreDmsCb);
+  button(b, "[ ADVERT ]", 108, kBtnY, 104, kBtnH, [](lv_event_t*) { advertPopup(); });
+  button(b, "[ EDIT ]", 216, kBtnY, 104, kBtnH, coreEditCb);
+}
+
+// ---- advert: FLOOD (repeaters pass it on) or LOCAL (zero hop, direct neighbours only)
+bool mcAdvert(bool flood) {
+  const NodePrefs* np = the_mesh.getNodePrefs();
+  mesh::Packet* pkt = the_mesh.createSelfAdvert(np->node_name);   // no GPS yet: no location
+  if (!pkt) return false;
+  if (!flood) { the_mesh.sendZeroHop(pkt); return true; }
+  // as the companion app's "flood advert" (CMD_SEND_SELF_ADVERT 1): default scope if one is set
+  TransportKey scope;
+  memcpy(&scope.key, np->default_scope_key, sizeof(scope.key));
+  if (scope.isNull()) {
+    the_mesh.sendFlood(pkt, (uint32_t)0, (uint8_t)(np->path_hash_mode + 1));
+  } else {
+    uint16_t codes[2] = { scope.calcTransportCode(pkt), 0 };
+    the_mesh.sendFlood(pkt, codes, (uint32_t)0, (uint8_t)(np->path_hash_mode + 1));
+  }
+  return true;
+}
+static void advFloodCb(lv_event_t*) { popupClose(); toast(mcAdvert(true) ? "Flood advert sent" : "Advert failed"); }
+static void advLocalCb(lv_event_t*) { popupClose(); toast(mcAdvert(false) ? "Local advert sent (zero hop)" : "Advert failed"); }
+void advertPopup() {
+  lv_obj_t* p = popup("SEND ADVERT", 150);
+  lv_obj_t* q = label(p,
+      "FLOOD: repeaters pass it on,\n"
+      "the whole mesh can learn you.\n"
+      "LOCAL: zero hop, only nodes in\n"
+      "direct radio range hear it.", FONT_M);
+  lv_obj_set_pos(q, 0, 22);
+  lv_obj_t* fl = popupButton(p, 0, 3, "[ FLOOD ]", advFloodCb);
+  popupButton(p, 1, 3, "[ LOCAL ]", advLocalCb);
+  popupButton(p, 2, 3, "[ CANCEL ]", [](lv_event_t*) { popupClose(); });
+  lv_group_focus_obj(fl);
 }
 
 void buildCoreHeard(lv_obj_t* b) {
