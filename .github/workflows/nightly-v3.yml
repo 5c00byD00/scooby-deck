@@ -94,6 +94,7 @@ jobs:
             echo "| \`$PREFIX-merged.bin\` | 0x0 (full image: bootloader, partitions, app) | $M_SIZE | \`$M_SHA\` |"
             echo
             echo "Flash: \`esptool.py --chip esp32s3 erase_flash\` then \`esptool.py --chip esp32s3 write_flash 0x0 $PREFIX-merged.bin\` (or a web flasher with \"erase\" ticked)."
+            if [ -f NIGHTLY.md ]; then echo; cat NIGHTLY.md; fi
           } > notes.md
           cat notes.md
           echo "m_sha=$M_SHA" >> "$GITHUB_OUTPUT"

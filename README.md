@@ -10,7 +10,21 @@ Our own firmware for the **LilyGO T-Deck Plus** that listens to **MeshCore** and
 - **Faro's T-Deck drivers** (Apache-2.0): display, keyboard, trackball, touch, backlight, battery.
 
 No WadaMesh UI, no phone BLE link, no Wi-Fi, no audio, no maps, no GPS (for now).
-The `v2` branch (WadaMesh-based) stays the testable build until v3 catches up.
+
+## Where v3 fits
+
+- **v2** (`v2.0.0-beta`, the Latest release) is the **proof of concept**: a stripped-down
+  WadaMesh that shows dual-mesh MeshCore + Meshtastic listening works on one radio. It's
+  usable today and is maintained for bug fixes.
+- **v3** (this branch, `nightly-v3`) is the **real Scooby Deck**: built from the ground up on
+  upstream MeshCore, much smaller (~0.9 MB merged image vs ~2.9 MB), and shaped by community
+  feedback. It becomes the main release once it's solid.
+
+**Which should I flash?** v2 if you want something that works now
+([Latest release](https://github.com/5c00byD00/scooby-deck/releases/latest)); the v3 nightly
+if you want to test what's next and send feedback
+([`nightly-v3`](https://github.com/5c00byD00/scooby-deck/releases/tag/nightly-v3)).
+Either way, flash the **merged bin at 0x0**. Each v3 nightly is a fresh wipe-and-flash.
 
 ## Build
 
