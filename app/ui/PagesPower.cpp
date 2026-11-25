@@ -85,6 +85,8 @@ void buildCharging(lv_obj_t* b) {
   s_mv = label(b, "", FONT_S, pal().dim);
   lv_obj_align(s_mv, LV_ALIGN_TOP_MID, 0, 164);
   lv_obj_t* n = label(b, "Tap the trackball to exit", FONT_M, pal().dim);
+  lv_obj_set_width(n, 320);
+  lv_obj_set_style_text_align(n, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(n, LV_ALIGN_BOTTOM_MID, 0, -12);
   refreshCharging(millis());
   // re-align after the text is set (centred labels)

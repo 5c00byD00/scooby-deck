@@ -595,7 +595,7 @@ static void mtAddCb(lv_event_t*) {
   lv_obj_t* a = label(p, "NAME (11 max)", FONT_S, pal().dim);
   lv_obj_set_pos(a, 0, 22);
   s_fName = textField(p, 0, 34, 288, "", 11);
-  lv_obj_t* k = label(p, "PSK  base64 / hex (blank = default AQ==)", FONT_S, pal().dim);
+  lv_obj_t* k = label(p, "PSK base64/hex (blank = AQ==)", FONT_S, pal().dim);
   lv_obj_set_pos(k, 0, 66);
   s_fKey = textField(p, 0, 78, 288, "", 64);
   popupButton(p, 0, 2, "[ SAVE ]", mtAddSaveCb);

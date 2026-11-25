@@ -66,9 +66,9 @@ void buildSetDisplay(lv_obj_t* b) {
   section(l, "LOCK");
   row(l, "LOCK SCREEN", p.lock_on ? "ON" : "OFF", lockCb);
   lv_obj_t* h = label(l,
-      "LOCK SCREEN ON: the deck locks when the\n"
-      "screen sleeps. Unlock: hold the trackball\n"
-      "for 3 s.\n"
+      "LOCK SCREEN ON: the deck locks when\n"
+      "the screen sleeps. Unlock: hold the\n"
+      "trackball for 3 s.\n"
       "SPACE (not while typing): sleep + lock\n"
       "after 1 s, whatever the setting; any\n"
       "other key in that second cancels.",

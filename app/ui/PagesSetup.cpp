@@ -248,7 +248,7 @@ static void mtSlotSet(const char* t) {
 static void mtSlotCb(lv_event_t*) {
   char cur[8], hint[64];
   snprintf(cur, sizeof cur, "%u", cfg().mt_slot);
-  snprintf(hint, sizeof hint, "0 = auto (from the channel name), 1-%u", mtSlotCount());
+  snprintf(hint, sizeof hint, "0 = auto (by channel name), 1-%u", mtSlotCount());
   numPopup("MESHTASTIC SLOT", hint, cur, mtSlotSet);
 }
 static void mtSfCb(lv_event_t*) {

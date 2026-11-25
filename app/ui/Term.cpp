@@ -400,6 +400,7 @@ void confirm(const char* question, const char* yes, void (*onYes)(void*), void* 
 // ============================================================== lock overlay
 static lv_obj_t* s_lock = nullptr;
 static lv_obj_t* s_lockHint = nullptr;
+static const char* const kLockText = "LOCKED\nhold trackball 3s";
 bool locked() { return s_lock != nullptr; }
 void lockEngage() {
   if (s_lock) return;
@@ -416,13 +417,17 @@ void lockEngage() {
   lv_obj_align(v, LV_ALIGN_TOP_MID, 0, 110);
   lv_obj_t* cr = label(s_lock, SCOOBY_CREDITS, FONT_S, pal().dim);
   lv_obj_align(cr, LV_ALIGN_TOP_MID, 0, 132);
-  s_lockHint = label(s_lock, "LOCKED  hold trackball 3s", FONT_M, pal().warn);
-  lv_obj_align(s_lockHint, LV_ALIGN_BOTTOM_MID, 0, -12);
+  // two short centred lines (8x16 font: 40 columns max); the M4 build's one 16x16 line was
+  // 400 px wide and lost its left edge on the 320 px panel
+  s_lockHint = label(s_lock, kLockText, FONT_M, pal().warn);
+  lv_obj_set_width(s_lockHint, 320);
+  lv_obj_set_style_text_align(s_lockHint, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(s_lockHint, LV_ALIGN_BOTTOM_MID, 0, -6);
   if (s_group) lv_group_remove_all_objs(s_group);
 }
 void lockHold(uint32_t held) {
   if (!s_lock || !s_lockHint) return;
-  if (held == 0) { lv_label_set_text(s_lockHint, "LOCKED  hold trackball 3s"); return; }
+  if (held == 0) { lv_label_set_text(s_lockHint, kLockText); return; }
   if (held >= 3000) {
     lv_obj_delete(s_lock);
     s_lock = nullptr; s_lockHint = nullptr;
@@ -430,7 +435,7 @@ void lockHold(uint32_t held) {
     return;
   }
   char b[40];
-  snprintf(b, sizeof b, "> UNLOCKING %u", (unsigned)((3000 - held + 999) / 1000));
+  snprintf(b, sizeof b, "UNLOCKING %u\nkeep holding", (unsigned)((3000 - held + 999) / 1000));
   lv_label_set_text(s_lockHint, b);
 }
 
