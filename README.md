@@ -5,13 +5,31 @@ receives on **both MeshCore and Meshtastic with one SX1262 radio**. It is a fork
 [WadaMesh](README.wadamesh.md) (ALLFATHER-BV), with the dual-mesh time-slicing from
 SquachWatch-CYD (skizzophrenic).
 
-> **Status:** early firmware. **v1.2.0-beta** is the current beta (pre-release); **v0.1.1** is
-> the latest stable release. Test builds are published as **pre-releases** (`vX.Y.Z-alpha.N`,
-> `vX.Y.Z-beta`), and the rolling
-> **`nightly`** pre-release always has the newest `main` build at a fixed URL:
-> https://github.com/5c00byD00/scooby-deck/releases/download/nightly/scooby-deck-tdeckplus-nightly-merged.bin
-> Pre-release and nightly builds may not have been tested on hardware. Please report what the
-> dashboard's `[MTRX]` counters show (see below).
+## Roadmap: v2 now, v3 next
+
+| | **v2** (`v2.0.0-beta`, Latest) | **v3** (`nightly-v3`) |
+|---|---|---|
+| What it is | The **proof of concept** | The **real Scooby Deck**, in the making |
+| Built on | A stripped-down WadaMesh | Upstream MeshCore, written from the ground up, with Faro's T-Deck drivers (credited) and our own Meshtastic + dual-mesh code |
+| Status | Usable today; maintained for bug fixes | Rolling nightly builds; shaped by community feedback |
+| Size | ~2.9 MB merged image | Much smaller: ~0.9 MB merged image |
+
+v2 shows that listening to MeshCore and Meshtastic on one radio works. v3 takes what v2 proved
+and builds the finished product on a clean base; it becomes the main release once it's solid.
+
+**Which should I flash?**
+- **v2** if you want something that works now:
+  [Latest release](https://github.com/5c00byD00/scooby-deck/releases/latest).
+- **v3 nightly** if you want to test what's next and send feedback:
+  [`nightly-v3`](https://github.com/5c00byD00/scooby-deck/releases/tag/nightly-v3)
+  ([v3 branch](https://github.com/5c00byD00/scooby-deck/tree/v3)).
+  Each nightly is a fresh wipe-and-flash.
+
+Either way, flash the **merged bin at 0x0** (see *Flashing* below). Nightly builds may not have
+been tested on hardware yet.
+
+> The rest of this page describes the WadaMesh-based firmware (v1.x / v2). The older v1.x
+> pre-releases and the `nightly` (main) build are still on the Releases page.
 
 ## Features
 - **Mesh modes:** Dual (default: MeshCore listens full-time, with short Meshtastic listens),
