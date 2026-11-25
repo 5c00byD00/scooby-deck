@@ -7,6 +7,7 @@
 #include "DualMeshStore.h"
 #include "ScoobyVersion.h"
 #include "Clock.h"
+#include "Favs.h"
 
 LV_FONT_DECLARE(sd_font_term16);
 LV_FONT_DECLARE(sd_font_term32);
@@ -367,6 +368,8 @@ lv_obj_t* popup(const char* title, int h) {
   char t[48];
   snprintf(t, sizeof t, "> %s", title);
   lv_obj_t* l = label(card, t);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);   // long node names: clip at the card edge
+  lv_obj_set_width(l, 288);
   lv_obj_set_pos(l, 0, 0);
   return card;
 }
@@ -489,6 +492,7 @@ bool handleKey(uint32_t key) {
 // ============================================================== begin / tick
 void begin() {
   loadPrefs();
+  mtFavCount();   // load the favorite list before the radio asks for it
   s_group = lv_group_create();
   lv_group_set_wrap(s_group, true);
   lv_group_set_default(s_group);

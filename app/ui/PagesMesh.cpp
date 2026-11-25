@@ -12,6 +12,7 @@
 unsigned int decode_base64(const unsigned char input[], unsigned int input_length, unsigned char output[]);
 #include "Ui.h"
 #include "McStore.h"
+#include "Favs.h"
 #include "DualMeshConfig.h"
 #include "DualMeshMt.h"
 
@@ -117,7 +118,9 @@ static void heardRows(lv_obj_t* l, int max) {
     char age[8], right[20];
     ageText(now > c->lastmod ? now - c->lastmod : 0, age, sizeof age);
     snprintf(right, sizeof right, "%c %s", mcTypeChar(c->type), age);
-    row(l, c->name[0] ? c->name : "(no name)", right, coreHeardCb, (void*)(intptr_t)i);
+    char nm[40];
+    snprintf(nm, sizeof nm, "%s%s", (c->flags & 0x01) ? "*" : "", c->name[0] ? c->name : "(no name)");
+    row(l, nm, right, coreHeardCb, (void*)(intptr_t)i);
   }
   if (!s_nHeard) label(l, "  -- nobody heard yet --", FONT_M, pal().dim);
 }
@@ -199,12 +202,20 @@ static void delNodeYes(void*) {
 }
 static void popDelCb(lv_event_t*) { confirm("Remove this node? It comes back when heard again.", "[ REMOVE ]", delNodeYes); }
 static void popCloseCb(lv_event_t*) { popupClose(); }
+static void popFavCb(lv_event_t*) {
+  ContactInfo* c = the_mesh.lookupContactByPubKey(s_popKey, PUB_KEY_SIZE);
+  popupClose();
+  if (!c) return;
+  c->flags ^= 0x01;   // MeshCore's favourite bit (as the companion app sets it)
+  store.saveContacts(&the_mesh);
+  toast((c->flags & 0x01) ? "Favorite: kept by KEEP FAVS" : "No longer a favorite");
+}
 static void coreHeardCb(lv_event_t* e) {
   const int i = (int)(intptr_t)lv_event_get_user_data(e);
   if (i < 0 || i >= s_nHeard) return;
   const ContactInfo* c = s_heard[i];
   memcpy(s_popKey, c->id.pub_key, 32);
-  lv_obj_t* p = popup(c->name[0] ? c->name : "NODE", 170);
+  lv_obj_t* p = popup(c->name[0] ? c->name : "NODE", 180);
   char k[17], age[8], buf[200];
   hex(c->id.pub_key, 8, k);
   const uint32_t now = nowSecs();
@@ -214,12 +225,14 @@ static void coreHeardCb(lv_event_t* e) {
   char path[16];
   if (c->out_path_len == OUT_PATH_UNKNOWN) snprintf(path, sizeof path, "flood");
   else snprintf(path, sizeof path, "%u hops", (unsigned)(c->out_path_len & 63));
-  snprintf(buf, sizeof buf, "TYPE  %s\nKEY   %s\nHEARD %s ago\nPATH  %s", type, k, age, path);
+  snprintf(buf, sizeof buf, "TYPE  %s\nKEY   %s\nHEARD %s ago\nPATH  %s\nFAV   %s", type, k, age, path,
+           (c->flags & 0x01) ? "yes" : "no");
   lv_obj_t* t = label(p, buf);
   lv_obj_set_pos(t, 0, 24);
-  lv_obj_t* dm = popupButton(p, 0, 3, "[ DM ]", popDmCb);
-  popupButton(p, 1, 3, "[ DEL ]", popDelCb);
-  popupButton(p, 2, 3, "[ CLOSE ]", popCloseCb);
+  lv_obj_t* dm = popupButton(p, 0, 4, "[ DM ]", popDmCb);
+  popupButton(p, 1, 4, (c->flags & 0x01) ? "[UNFAV]" : "[ FAV ]", popFavCb);
+  popupButton(p, 2, 4, "[ DEL ]", popDelCb);
+  popupButton(p, 3, 4, "[CLOSE]", popCloseCb);
   if (c->type != ADV_TYPE_CHAT) lv_obj_add_state(dm, LV_STATE_DISABLED);
   lv_group_focus_obj(dm);
 }
@@ -426,7 +439,7 @@ static void mtHeardRows(lv_obj_t* l, int max) {
     if (!Mt::nodeAt(i, nd)) continue;
     char name[40], left[64], age[8], right[24];
     Mt::nodeName(nd.num, name, sizeof name);
-    snprintf(left, sizeof left, "%s !%08lx", name, (unsigned long)nd.num);
+    snprintf(left, sizeof left, "%s%s !%08lx", mtFav(nd.num) ? "*" : "", name, (unsigned long)nd.num);
     ageText((millis() - nd.lastMs) / 1000, age, sizeof age);
     snprintf(right, sizeof right, "%s %+.1f", age, nd.snr4 / 4.0);
     row(l, left, right, mtHeardCb, (void*)(uintptr_t)nd.num);
@@ -466,6 +479,12 @@ void buildMtHeard(lv_obj_t* b) {
 static uint32_t s_mtPop = 0;
 static void mtPopDmCb(lv_event_t*) { ctx.mtPeer = s_mtPop; ctx.chan = -1; popupClose(); go(P_MT_CHAT); }
 static void mtDelYes(void*) { Mt::deleteNode(s_mtPop); toast("Node removed"); }
+static void mtPopFavCb(lv_event_t*) {
+  const bool on = !mtFav(s_mtPop);
+  mtFavSet(s_mtPop, on);
+  popupClose();
+  toast(on ? "Favorite: kept by KEEP FAVS" : "No longer a favorite");
+}
 static void mtPopDelCb(lv_event_t*) { confirm("Remove this node? It comes back when heard again.", "[ REMOVE ]", mtDelYes); }
 static void mtHeardCb(lv_event_t* e) {
   s_mtPop = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
@@ -486,9 +505,10 @@ static void mtHeardCb(lv_event_t* e) {
   lv_obj_set_width(t, 288);
   lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
   lv_obj_set_pos(t, 0, 22);
-  lv_obj_t* dm = popupButton(p, 0, 3, "[ DM ]", mtPopDmCb);
-  popupButton(p, 1, 3, "[ DEL ]", mtPopDelCb);
-  popupButton(p, 2, 3, "[ CLOSE ]", popCloseCb);
+  lv_obj_t* dm = popupButton(p, 0, 4, "[ DM ]", mtPopDmCb);
+  popupButton(p, 1, 4, mtFav(nd.num) ? "[UNFAV]" : "[ FAV ]", mtPopFavCb);
+  popupButton(p, 2, 4, "[ DEL ]", mtPopDelCb);
+  popupButton(p, 3, 4, "[CLOSE]", popCloseCb);
   lv_group_focus_obj(dm);
 }
 

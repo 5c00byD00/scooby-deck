@@ -63,6 +63,7 @@ uint16_t unreadDm(uint32_t peer);
 uint16_t chanMsgCount(uint8_t chan);      // stored messages on a channel
 void     deleteDm(uint32_t peer);         // drop a DM conversation
 bool     deleteNode(uint32_t num);        // drop a node from the heard list (it comes back when heard)
+bool     isFavourite(uint32_t num);       // v3: implemented by the UI (ui/Favs.cpp); kept when the table is full
 uint32_t changeSeq();                     // bumps when anything changes
 
 // Nodes

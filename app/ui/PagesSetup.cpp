@@ -14,6 +14,7 @@
 #include "ScoobyVersion.h"
 #include "Clock.h"
 #include "McStore.h"
+#include "Favs.h"
 #include <DataStore.h>
 extern DataStore store;
 
@@ -267,18 +268,34 @@ static void mtHopsCb(lv_event_t*) {
   save();
   go(P_SET_MT);
 }
-static void mtClearYes(void*) {
-  int n = 0;
-  Mt::Node nd;
-  for (int guard = 0; guard < 512 && Mt::nodeCount() && Mt::nodeAt(0, nd); guard++) {
-    if (!Mt::deleteNode(nd.num)) break;
-    n++;
-  }
-  char t[40];
-  snprintf(t, sizeof t, "Cleared %d node%s", n, n == 1 ? "" : "s");
-  toast(t);
-  go(P_SET_MT);
+// ---- CLEAR LAST HEARD popup (both meshes): CLEAR ALL / KEEP FAVS / CANCEL
+static void clearPopup(const char* title, const char* text, lv_event_cb_t all, lv_event_cb_t keep) {
+  lv_obj_t* p = popup(title, 160);
+  lv_obj_t* q = label(p, text, FONT_M);
+  lv_obj_set_pos(q, 0, 22);
+  popupButton(p, 0, 3, "[CLEAR ALL]", all);
+  popupButton(p, 1, 3, "[KEEP FAVS]", keep);
+  lv_obj_t* c = popupButton(p, 2, 3, "[ CANCEL ]", [](lv_event_t*) { popupClose(); });
+  lv_group_focus_obj(c);   // the safe choice has the focus
 }
+static void clearedToast(int n, const char* what) {
+  char t[48];
+  snprintf(t, sizeof t, "Cleared %d %s%s", n, what, n == 1 ? "" : "s");
+  toast(t);
+}
+static void mtClear(bool keepFavs) {
+  int n = 0;
+  uint32_t nums[64];
+  int k = 0;
+  Mt::Node nd;
+  for (uint8_t i = 0; i < Mt::nodeCount() && k < 64; i++)
+    if (Mt::nodeAt(i, nd) && !(keepFavs && mtFav(nd.num))) nums[k++] = nd.num;
+  for (int i = 0; i < k; i++) if (Mt::deleteNode(nums[i])) n++;
+  if (!keepFavs) mtFavClearAll();   // CLEAR ALL forgets the favorite marks too
+  clearedToast(n, "node");
+}
+static void mtClearAllCb(lv_event_t*)  { popupClose(); mtClear(false); }
+static void mtClearKeepCb(lv_event_t*) { popupClose(); mtClear(true); }
 void buildSetMt(lv_obj_t* b) {
   lv_obj_t* l = list(b, 0, 0, 320, 218);
   const Config& c = cfg();
@@ -307,7 +324,12 @@ void buildSetMt(lv_obj_t* b) {
   section(l, "NODES");
   snprintf(r, sizeof r, "%u nodes >", Mt::nodeCount());
   row(l, "CLEAR LAST HEARD", r, [](lv_event_t*) {
-    confirm("Clear Meshtastic last heard? Nodes return when heard again.", "[ CLEAR ]", mtClearYes); });
+    clearPopup("CLEAR LAST HEARD (TASTIC)",
+               "CLEAR ALL: every node, and the\n"
+               "favorite marks.\n"
+               "KEEP FAVS: favorites stay.\n"
+               "Nodes come back when heard.",
+               mtClearAllCb, mtClearKeepCb); });
   lv_group_focus_obj(first);
 }
 
@@ -365,16 +387,16 @@ static void mcTxCb(lv_event_t*) {
   go(P_SET_MC);
 }
 static void mcAdvertCb(lv_event_t*) { advertPopup(); }
-// Clear last heard = remove the MeshCore contacts, except favourites and anyone with a DM
-// thread (they hold the key a reply needs). Contacts come back with their next advert.
-static void mcClearYes(void*) {
+// Clear last heard = remove MeshCore contacts. KEEP FAVS keeps favorites and anyone with
+// a DM thread (they hold the key a reply needs); CLEAR ALL removes every contact.
+// Contacts come back with their next advert.
+static void mcClear(bool keep) {
   static uint8_t keys[MAX_CONTACTS][PUB_KEY_SIZE];
   int nk = 0;
   ContactsIterator it = the_mesh.startContactsIterator();
   ContactInfo c;
   while (nk < MAX_CONTACTS && it.hasNext(&the_mesh, c)) {
-    if (c.flags & 0x01) continue;                       // favourite
-    if (mc::hasDm(c.id.pub_key)) continue;
+    if (keep && ((c.flags & 0x01) || mc::hasDm(c.id.pub_key))) continue;
     memcpy(keys[nk++], c.id.pub_key, PUB_KEY_SIZE);
   }
   int n = 0;
@@ -383,11 +405,11 @@ static void mcClearYes(void*) {
     if (p && the_mesh.removeContact(*p)) n++;
   }
   if (n) store.saveContacts(&the_mesh);
-  char t[48];
-  snprintf(t, sizeof t, "Cleared %d contact%s", n, n == 1 ? "" : "s");
-  toast(t);
+  clearedToast(n, "contact");
   go(P_SET_MC);
 }
+static void mcClearAllCb(lv_event_t*)  { popupClose(); mcClear(false); }
+static void mcClearKeepCb(lv_event_t*) { popupClose(); mcClear(true); }
 void buildSetMc(lv_obj_t* b) {
   lv_obj_t* l = list(b, 0, 0, 320, 218);
   const NodePrefs* np = the_mesh.getNodePrefs();
@@ -410,7 +432,13 @@ void buildSetMc(lv_obj_t* b) {
   row(l, "SEND ADVERT", "FLOOD / LOCAL >", mcAdvertCb);
   snprintf(r, sizeof r, "%d contacts >", the_mesh.getNumContacts());
   row(l, "CLEAR LAST HEARD", r, [](lv_event_t*) {
-    confirm("Clear MeshCore last heard? Favourites and DM partners stay.", "[ CLEAR ]", mcClearYes); });
+    clearPopup("CLEAR LAST HEARD (CORE)",
+               "CLEAR ALL: every contact, also\n"
+               "favorites and DM partners.\n"
+               "KEEP FAVS: favorites and DM\n"
+               "partners stay. The rest come\n"
+               "back with their next advert.",
+               mcClearAllCb, mcClearKeepCb); });
   lv_obj_t* h = label(l, "Editing FREQ/BW/SF/CR makes it CUSTOM.\nThe SF here is MeshCore's own; TASTIC\nhas its own SF override.", FONT_S, pal().dim);
   lv_obj_set_width(h, lv_pct(100));
   lv_group_focus_obj(first);

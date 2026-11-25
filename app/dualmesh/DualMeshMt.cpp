@@ -108,9 +108,16 @@ static void noteNode(const Lora::Packet& pk, const Header& h) {
     for (uint8_t i = 0; i < s_nNodes; i++) if (s_nodes[i].num == h.from) { at = i; break; }
     if (at < 0) {
         if (s_nNodes < MAX_NODES) at = s_nNodes++;
-        else {   // replace the oldest
-            at = 0;
-            for (uint8_t i = 1; i < s_nNodes; i++) if (s_nodes[i].lastMs < s_nodes[at].lastMs) at = i;
+        else {   // replace the oldest, favourites last (v3)
+            at = -1;
+            for (uint8_t i = 0; i < s_nNodes; i++) {
+                if (isFavourite(s_nodes[i].num)) continue;
+                if (at < 0 || s_nodes[i].lastMs < s_nodes[at].lastMs) at = i;
+            }
+            if (at < 0) {
+                at = 0;
+                for (uint8_t i = 1; i < s_nNodes; i++) if (s_nodes[i].lastMs < s_nodes[at].lastMs) at = i;
+            }
         }
         memset(&s_nodes[at], 0, sizeof s_nodes[at]);
         s_nodes[at].num = h.from;
