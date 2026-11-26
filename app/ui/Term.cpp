@@ -434,8 +434,16 @@ void confirm(const char* question, const char* yes, void (*onYes)(void*), void* 
 // ============================================================== lock overlay
 static lv_obj_t* s_lock = nullptr;
 static lv_obj_t* s_lockHint = nullptr;
+static lv_obj_t* s_lockBatt = nullptr;
 static const char* const kLockText = "LOCKED\nhold trackball 3s";
 bool locked() { return s_lock != nullptr; }
+static void lockBattUpdate() {
+  if (!s_lockBatt) return;
+  const uint16_t mv = battMv();
+  char b[32];
+  snprintf(b, sizeof b, "BATT %u%%  %u.%02u V", (unsigned)battPct(), mv / 1000, mv % 1000 / 10);
+  lv_label_set_text(s_lockBatt, b);
+}
 void lockEngage() {
   if (s_lock) return;
   if (s_popup) { lv_obj_delete(s_popup); s_popup = nullptr; }
@@ -451,6 +459,12 @@ void lockEngage() {
   lv_obj_align(v, LV_ALIGN_TOP_MID, 0, 110);
   lv_obj_t* cr = label(s_lock, SCOOBY_CREDITS, FONT_S, pal().dim);
   lv_obj_align(cr, LV_ALIGN_TOP_MID, 0, 132);
+  // battery between the credits (ends y 164) and the prompt (starts y 200), theme text colour
+  s_lockBatt = label(s_lock, "", FONT_M);
+  lv_obj_set_width(s_lockBatt, 320);
+  lv_obj_set_style_text_align(s_lockBatt, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(s_lockBatt, 0, 174);
+  lockBattUpdate();
   // two short centred lines (8x16 font: 40 columns max); the M4 build's one 16x16 line was
   // 400 px wide and lost its left edge on the 320 px panel
   s_lockHint = label(s_lock, kLockText, FONT_M, pal().warn);
@@ -464,7 +478,7 @@ void lockHold(uint32_t held) {
   if (held == 0) { lv_label_set_text(s_lockHint, kLockText); return; }
   if (held >= 3000) {
     lv_obj_delete(s_lock);
-    s_lock = nullptr; s_lockHint = nullptr;
+    s_lock = nullptr; s_lockHint = nullptr; s_lockBatt = nullptr;
     s_pending = s_page; s_rebuild = true;   // focus chain back
     return;
   }
@@ -573,6 +587,7 @@ void tick(uint32_t now) {
   if (now - s_lastRefresh >= 1000) {
     s_lastRefresh = now;
     updateHeaderRight();
+    lockBattUpdate();
     if (s_page == P_HOME) refreshHome(now);
     else if (s_page == P_BOOT) refreshBoot(now);
     else if (s_page == P_CHARGING) refreshCharging(now);

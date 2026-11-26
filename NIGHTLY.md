@@ -16,3 +16,5 @@ Flash the **merged bin at 0x0** (erase first): each nightly is a fresh wipe-and-
 - **Lock screen ignores touch:** while the deck is locked, the touchscreen does nothing. It
   doesn't wake the screen or keep it on. Press any key or use the trackball to wake it, then
   hold the trackball 3 s to unlock as before. Touch works again after unlocking.
+- **Battery on the lock screen:** a `BATT 87%  4.08 V` line between the credits and the
+  LOCKED prompt, in the theme's text colour. It updates every second while locked.
