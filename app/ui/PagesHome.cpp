@@ -23,7 +23,9 @@ void buildBoot(lv_obj_t* b) {
   lv_obj_t* cr = label(b, SCOOBY_CREDITS, FONT_S, pal().dim);
   lv_obj_align(cr, LV_ALIGN_TOP_MID, 0, 130);
   lv_obj_t* l = label(b, "> BOOTING_", FONT_M);
-  lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 8, -10);
+  lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 8, -22);
+  lv_obj_t* r = label(b, "BKSP / hold ball: CLASSIC CYBER theme", FONT_S, pal().dim);
+  lv_obj_align(r, LV_ALIGN_BOTTOM_LEFT, 8, -6);
 }
 void refreshBoot(uint32_t now) {
   if (now - s_bootAt < 2500) return;

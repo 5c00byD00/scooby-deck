@@ -16,9 +16,16 @@ namespace sd {
 
 // ============================================================== theme
 static const Palette kSchemes[] = {
-  { 0x000000, 0x33FF66, 0x1E8C3C, 0x0B3D1A, 0xFFB000, "GREEN" },
+  //  bg        ink       dim       line      focusBg   focusFg   pressBg   pressFg   warn      ok        err
+  { 0x000000, 0x33FF66, 0x1E8C3C, 0x33FF66, 0x33FF66, 0x000000, 0x1E8C3C, 0x000000, 0xFFB000, 0x33FF66, 0xFF5050, "CLASSIC CYBER" },
+  // night vision: only dim, warm reds (no white, no green, no blue)
+  { 0x000000, 0xC8321E, 0x9A2A18, 0x8C2416, 0xB42D1A, 0x000000, 0x4A120A, 0xC8321E, 0xD2601E, 0xC8321E, 0xFF3C1E, "NIGHT MODE" },
+  // WIN98: silver face, navy text, navy selection with white text
+  { 0xC0C0C0, 0x000080, 0x404040, 0x000080, 0x000080, 0xFFFFFF, 0x808080, 0xFFFFFF, 0x800000, 0x006400, 0xA00000, "WIN98" },
+  { 0xFFFFFF, 0x000000, 0x4A4A4A, 0x000000, 0x000000, 0xFFFFFF, 0x808080, 0xFFFFFF, 0xA00000, 0x006400, 0xA00000, "HIGH CONTRAST" },
 };
 uint8_t schemeCount() { return sizeof kSchemes / sizeof kSchemes[0]; }
+const char* schemeName(uint8_t i) { return kSchemes[i < schemeCount() ? i : 0].name; }
 const Palette& pal() { return kSchemes[prefs().scheme < schemeCount() ? prefs().scheme : 0]; }
 const lv_font_t* const FONT_S = &lv_font_unscii_8;
 const lv_font_t* const FONT_M = &sd_font_term16;   // 8x16: 40 columns, v2 used 8x8, v3.0 16x16
@@ -40,6 +47,7 @@ void loadPrefs() {
     p.clock24 = 0; p.tz_q = -20;     // 12 h, UTC-5 (US Eastern standard time)
   }
   if (p.tz_q < -48 || p.tz_q > 56) p.tz_q = 0;
+  if (p.scheme >= schemeCount()) p.scheme = 0;   // unknown / older: CLASSIC CYBER
   if (p.brightness < 10) p.brightness = 10;
   if (p.brightness > 100) p.brightness = 100;
   s_prefs = p;
@@ -102,6 +110,13 @@ void setTitle(const char* title) {
 }
 void setHeaderText(const char* text) { if (s_hdrTitle) lv_label_set_text(s_hdrTitle, text); }
 void noteActivity() { s_lastActivity = millis(); }
+void themeResetDefault() {
+  if (prefs().scheme == 0) return;
+  prefs().scheme = 0;
+  savePrefs();
+  s_pending = s_page; s_rebuild = true;   // redraw in CLASSIC CYBER
+  toast("Theme reset: CLASSIC CYBER", 2000);
+}
 bool keyNav() { return s_keyNav; }
 void setKeyNav(bool on) { s_keyNav = on; }
 bool showFocus() {
@@ -124,21 +139,22 @@ static void baseStyle(lv_obj_t* o) {
   lv_obj_set_style_text_font(o, FONT_M, 0);
   lv_obj_set_style_text_color(o, lv_color_hex(pal().ink), 0);
   lv_obj_set_style_bg_color(o, lv_color_hex(pal().bg), 0);
-  lv_obj_set_style_border_color(o, lv_color_hex(pal().ink), 0);
+  lv_obj_set_style_border_color(o, lv_color_hex(pal().line), 0);
 }
 void styleFocus(lv_obj_t* o) {
   // Highlight only what the trackball / keys point at (FOCUS_KEY), not the group's default
   // focus: the HOME default (CORE) looked selected all the time, and a touch left it lit.
   const lv_style_selector_t foc = LV_PART_MAIN | LV_STATE_FOCUS_KEY;
   const lv_style_selector_t prs = LV_PART_MAIN | LV_STATE_PRESSED;
-  lv_obj_set_style_bg_color(o, lv_color_hex(pal().ink), foc);
+  lv_obj_set_style_bg_color(o, lv_color_hex(pal().focusBg), foc);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, foc);
-  lv_obj_set_style_text_color(o, lv_color_hex(pal().bg), foc);
-  lv_obj_set_style_bg_color(o, lv_color_hex(pal().dim), prs);
+  lv_obj_set_style_text_color(o, lv_color_hex(pal().focusFg), foc);
+  lv_obj_set_style_bg_color(o, lv_color_hex(pal().pressBg), prs);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, prs);
+  lv_obj_set_style_text_color(o, lv_color_hex(pal().pressFg), prs);
 }
 static void scrollStyle(lv_obj_t* o) {
-  lv_obj_set_style_bg_color(o, lv_color_hex(pal().ink), LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_color(o, lv_color_hex(pal().line), LV_PART_SCROLLBAR);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_SCROLLBAR);
   lv_obj_set_style_width(o, 3, LV_PART_SCROLLBAR);
   lv_obj_set_style_pad_right(o, 1, LV_PART_SCROLLBAR);
@@ -223,7 +239,9 @@ lv_obj_t* row(lv_obj_t* lst, const char* left, const char* right, lv_event_cb_t 
       lv_obj_set_style_bg_opa(rr, LV_OPA_COVER, 0);
       lv_obj_set_style_text_color(rr, lv_color_hex(pal().bg), 0);
     } else {
-      lv_obj_set_style_text_color(rr, lv_color_hex(pal().dim), 0);
+      // no own colour: it inherits the row's text colour (ink, or focusFg / pressFg when the
+      // row is selected / pressed) and is just fainter, so it stays readable on every theme
+      lv_obj_set_style_text_opa(rr, LV_OPA_70, 0);
     }
     lv_obj_update_layout(rr);
     lv_obj_set_width(l, 300 - lv_obj_get_width(rr) - 12);
@@ -248,12 +266,12 @@ lv_obj_t* textField(lv_obj_t* parent, int x, int y, int w, const char* text, siz
   lv_textarea_set_text(t, text ? text : "");
   lv_obj_set_style_border_width(t, 1, 0);
   lv_obj_set_style_border_color(t, lv_color_hex(pal().dim), 0);
-  lv_obj_set_style_border_color(t, lv_color_hex(pal().ink), LV_STATE_FOCUSED);
+  lv_obj_set_style_border_color(t, lv_color_hex(pal().line), LV_STATE_FOCUSED);
   lv_obj_set_style_border_width(t, 2, LV_STATE_FOCUSED);
   lv_obj_set_style_pad_all(t, 3, 0);
   lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
   // block cursor, blinking
-  lv_obj_set_style_bg_color(t, lv_color_hex(pal().ink), LV_PART_CURSOR | LV_STATE_FOCUSED);
+  lv_obj_set_style_bg_color(t, lv_color_hex(pal().line), LV_PART_CURSOR | LV_STATE_FOCUSED);
   lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_PART_CURSOR | LV_STATE_FOCUSED);
   lv_obj_set_style_anim_duration(t, 500, LV_PART_CURSOR | LV_STATE_FOCUSED);
   lv_obj_set_style_text_color(t, lv_color_hex(pal().dim), LV_PART_TEXTAREA_PLACEHOLDER);
@@ -467,6 +485,7 @@ bool handleKey(uint32_t key) {
   if (locked()) return true;
   if (typing()) return false;
   if (key >= 'A' && key <= 'Z') key += 32;
+  if (s_page == P_BOOT && (key == 0x08 || key == 0x7F)) { themeResetDefault(); return true; }
   if (s_page == P_BOOT || s_page == P_NAMES_FIRST) return false;
   if (s_page == P_CHARGING) {   // only the trackball (or B / Esc) leaves; everything else is ignored
     if (key == 'b' || key == 0x08 || key == 0x1B) back();

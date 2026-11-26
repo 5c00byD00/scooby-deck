@@ -46,6 +46,13 @@ static void kbCb(lv_event_t*) {
   go(P_SET_DISPLAY);
 }
 
+static void themeCb(lv_event_t*) {
+  UiPrefs& p = prefs();
+  p.scheme = (uint8_t)((p.scheme + 1) % schemeCount());
+  savePrefs();
+  go(P_SET_DISPLAY);   // every page is drawn from the theme, so a redraw applies it
+}
+
 static void lockCb(lv_event_t*) {
   UiPrefs& p = prefs();
   p.lock_on = !p.lock_on;
@@ -62,7 +69,7 @@ void buildSetDisplay(lv_obj_t* b) {
   lv_obj_t* first = row(l, "BRIGHTNESS", r, brightCb);
   row(l, "SLEEP AFTER", sleepName(p.sleep_s), sleepCb);
   row(l, "KEYBOARD LIGHT", kbName(p.kb_bl), kbCb);
-  row(l, "COLOURS", "GREEN", [](lv_event_t*) { toast("More colour schemes later", 1500); });
+  row(l, "THEME", schemeName(p.scheme), themeCb);
   section(l, "LOCK");
   row(l, "LOCK SCREEN", p.lock_on ? "ON" : "OFF", lockCb);
   lv_obj_t* h = label(l,
@@ -71,7 +78,10 @@ void buildSetDisplay(lv_obj_t* b) {
       "trackball for 3 s.\n"
       "SPACE (not while typing): sleep + lock\n"
       "after 1 s, whatever the setting; any\n"
-      "other key in that second cancels.",
+      "other key in that second cancels.\n"
+      "THEME back to CLASSIC CYBER: press\n"
+      "BACKSPACE or hold the trackball on\n"
+      "the boot screen.",
       FONT_S, pal().dim);
   lv_obj_set_width(h, lv_pct(100));
   lv_group_focus_obj(first);

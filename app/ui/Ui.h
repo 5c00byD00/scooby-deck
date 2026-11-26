@@ -8,9 +8,22 @@
 namespace sd {
 
 // ---------------------------------------------------------------- theme
-struct Palette { uint32_t bg, ink, dim, hi, warn; const char* name; };
+// A theme. Only these presets exist (no mix-and-match, so no green-on-green by accident).
+struct Palette {
+  uint32_t bg;                // screen / box background
+  uint32_t ink;               // text
+  uint32_t dim;               // secondary text, hints, outgoing messages
+  uint32_t line;              // borders, header rule, scrollbar, text cursor
+  uint32_t focusBg, focusFg;  // the trackball selection (FOCUS_KEY)
+  uint32_t pressBg, pressFg;  // a button while pressed (touch flash)
+  uint32_t warn;              // prompts like LOCKED, notes
+  uint32_t ok, err;           // delivery OK / failed
+  const char* name;
+};
 const Palette& pal();
 uint8_t schemeCount();
+const char* schemeName(uint8_t i);
+void    themeResetDefault();   // back to CLASSIC CYBER (boot screen: BACKSPACE or hold the trackball)
 extern const lv_font_t* const FONT_S;   // unscii 8  (status dump)
 extern const lv_font_t* const FONT_M;   // unscii-16, 8x16 (everything else)
 extern const lv_font_t* const FONT_L;   // unscii-16 doubled, 16x32: digits only (charging screen)
@@ -23,7 +36,7 @@ struct UiPrefs {
   uint8_t  kb_bl;        // 0..255
   uint8_t  lock_on;      // lock screen on wake
   uint8_t  names_done;   // first-boot name setup finished
-  uint8_t  scheme;       // colour scheme (green only for now)
+  uint8_t  scheme;       // theme: 0 CLASSIC CYBER, 1 NIGHT MODE, 2 WIN98, 3 HIGH CONTRAST
   uint8_t  mc_preset;    // last MeshCore NA preset picked (0xFF custom)
   uint8_t  clock24;      // v2: 1 = 24 h clock, 0 = 12 h
   int8_t   tz_q;         // v2: UTC offset in quarter hours (-20 = UTC-5)

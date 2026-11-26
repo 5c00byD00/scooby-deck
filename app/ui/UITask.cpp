@@ -83,6 +83,7 @@ void readTrackball(lv_indev_t*, lv_indev_data_t* d) {
   bool clicked = false, longPressed = false;
   g->trackball.poll(dx, dy, clicked, longPressed);
   const uint32_t held = g->trackball.heldMs();
+  if (sd::page() == sd::P_BOOT && held >= 1500) sd::themeResetDefault();   // safety net
   if (sd::locked()) {
     if (dx || dy || clicked || held) wake();
     sd::lockHold(held);
