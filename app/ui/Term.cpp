@@ -51,7 +51,8 @@ Ctx ctx;
 static lv_group_t* s_group = nullptr;
 static Page s_page = P_NONE, s_pending = P_NONE;
 static bool s_rebuild = false;
-static int s_focusIdx = -1;      // focused object's index in the group (no popup open)
+static int s_focusIdx = -1;
+static bool s_keyNav = false;   // the user is steering with the trackball (not touch)      // focused object's index in the group (no popup open)
 static lv_obj_t* s_body = nullptr;
 static lv_obj_t* s_hdrRight = nullptr;
 static lv_obj_t* s_hdrTitle = nullptr;
@@ -101,6 +102,16 @@ void setTitle(const char* title) {
 }
 void setHeaderText(const char* text) { if (s_hdrTitle) lv_label_set_text(s_hdrTitle, text); }
 void noteActivity() { s_lastActivity = millis(); }
+bool keyNav() { return s_keyNav; }
+void setKeyNav(bool on) { s_keyNav = on; }
+bool showFocus() {
+  // make the (programmatic) focus visible; false if it already was or there is none
+  lv_obj_t* f = s_group ? lv_group_get_focused(s_group) : nullptr;
+  if (!f || lv_obj_has_state(f, LV_STATE_FOCUS_KEY)) return false;
+  lv_obj_add_state(f, LV_STATE_FOCUS_KEY);
+  lv_obj_scroll_to_view_recursive(f, LV_ANIM_OFF);
+  return true;
+}
 
 bool typing() {
   lv_obj_t* f = s_group ? lv_group_get_focused(s_group) : nullptr;
@@ -116,7 +127,9 @@ static void baseStyle(lv_obj_t* o) {
   lv_obj_set_style_border_color(o, lv_color_hex(pal().ink), 0);
 }
 void styleFocus(lv_obj_t* o) {
-  const lv_style_selector_t foc = LV_PART_MAIN | LV_STATE_FOCUSED;
+  // Highlight only what the trackball / keys point at (FOCUS_KEY), not the group's default
+  // focus: the HOME default (CORE) looked selected all the time, and a touch left it lit.
+  const lv_style_selector_t foc = LV_PART_MAIN | LV_STATE_FOCUS_KEY;
   const lv_style_selector_t prs = LV_PART_MAIN | LV_STATE_PRESSED;
   lv_obj_set_style_bg_color(o, lv_color_hex(pal().ink), foc);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, foc);
@@ -527,6 +540,7 @@ void tick(uint32_t now) {
           lv_obj_scroll_to_view_recursive(o, LV_ANIM_OFF);
         }
       }
+      if (s_keyNav) showFocus();   // rebuilt while steering: keep the highlight on
       s_sig = kPages[p].mesh ? meshSignature(p) : 0;
       updateHeaderRight();
     }

@@ -68,6 +68,7 @@ void readTouch(lv_indev_t*, lv_indev_data_t* d) {
   if (g->touch.read(x, y)) {
     d->point.x = x; d->point.y = y;
     d->state = wake() || sd::locked() ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED;
+    if (d->state == LV_INDEV_STATE_PRESSED) sd::setKeyNav(false);   // touch: no lasting highlight
   } else {
     d->point.x = x; d->point.y = y;
     d->state = LV_INDEV_STATE_RELEASED;
@@ -94,6 +95,10 @@ void readTrackball(lv_indev_t*, lv_indev_data_t* d) {
     return;
   }
   if (longPressed) { sd::back(); return; }
+  // First roll or click while nothing is highlighted (after touch, or a fresh page): light up
+  // the current focus instead of moving off it / pressing something the user can't see.
+  sd::setKeyNav(true);
+  if (sd::showFocus()) return;
   d->enc_diff = (int16_t)(dy + dx);
   if (clicked) { d->state = LV_INDEV_STATE_PRESSED; g->encPressed = true; }
 }
@@ -107,7 +112,11 @@ void readKeyboard(lv_indev_t*, lv_indev_data_t* d) {
   if (wake()) return;
   if (sd::handleKey(k)) return;
   uint32_t lk = k;
-  if (k == 0x0D || k == 0x0A) lk = LV_KEY_ENTER;
+  if (k == 0x0D || k == 0x0A) {
+    lk = LV_KEY_ENTER;
+    // ENTER on a button nobody can see as selected: show the selection first
+    if (!sd::typing()) { sd::setKeyNav(true); if (sd::showFocus()) return; }
+  }
   else if (k == 0x08) lk = LV_KEY_BACKSPACE;
   else if (k == 0x1B) lk = LV_KEY_ESC;
   g->kbKey = lk; g->kbPressed = true;

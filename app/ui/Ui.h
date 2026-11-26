@@ -72,6 +72,9 @@ bool        typing();                  // a text field has the focus
 bool        handleKey(uint32_t key);   // hotkeys when not typing; true = eaten
 void        toast(const char* text, uint32_t ms = 1600);
 void        noteActivity();
+bool        keyNav();                  // last input was the trackball (highlight on)
+void        setKeyNav(bool on);        // touch: false
+bool        showFocus();               // highlight the focused object; false if it already was
 
 // lock screen
 bool        locked();
