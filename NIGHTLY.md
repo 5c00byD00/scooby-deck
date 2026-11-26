@@ -13,3 +13,6 @@ Flash the **merged bin at 0x0** (erase first): each nightly is a fresh wipe-and-
   colours, and the change applies straight away. If a theme ever makes the screen hard to
   read, press **BACKSPACE** (or hold the trackball) on the boot screen to go back to CLASSIC
   CYBER.
+- **Lock screen ignores touch:** while the deck is locked, the touchscreen does nothing. It
+  doesn't wake the screen or keep it on. Press any key or use the trackball to wake it, then
+  hold the trackball 3 s to unlock as before. Touch works again after unlocking.

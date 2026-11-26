@@ -67,7 +67,11 @@ void readTouch(lv_indev_t*, lv_indev_data_t* d) {
   int16_t x = 0, y = 0;
   if (g->touch.read(x, y)) {
     d->point.x = x; d->point.y = y;
-    d->state = wake() || sd::locked() ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED;
+    // Locked: the touchscreen is ignored completely. It neither wakes the panel nor counts as
+    // activity (which kept the screen on); a key or the trackball wakes it, and holding the
+    // trackball 3 s unlocks. Touch works again once unlocked.
+    if (sd::locked()) { d->state = LV_INDEV_STATE_RELEASED; return; }
+    d->state = wake() ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED;
     if (d->state == LV_INDEV_STATE_PRESSED) sd::setKeyNav(false);   // touch: no lasting highlight
   } else {
     d->point.x = x; d->point.y = y;
